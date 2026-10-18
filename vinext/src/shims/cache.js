@@ -105,8 +105,8 @@ const ELEMENTS = new Set([Symbol.for("react.transitional.element"), Symbol.for("
 // cannot pass (other functions, local symbols, class instances) is refused
 // with React's words. Values JSON cannot tell apart get tagged objects, and a
 // plain object with $-keys is tagged too, so no value keys as another.
-// An object met again (round a cycle, or shared) keys as where it was first
-// met, as React writes a reference to it. settled holds the promises met so
+// An object met again (round a cycle, or shared) keys as which one it was, in
+// the order met, as React writes a reference to it. settled holds the promises met so
 // far by what they came to; the ones not yet settled are pushed onto pending
 // (and key as null for now). With temporary set (for arguments), a function
 // or class instance makes the call unkeyable: Next.js passes them through as
@@ -115,23 +115,13 @@ const ELEMENTS = new Set([Symbol.for("react.transitional.element"), Symbol.for("
 // request that makes a new one).
 function boundReplacer(settled, pending, temporary = false) {
   const keying = new Set(); // the cached functions whose closed-over values are being keyed
-  const paths = new Map(); // the objects met so far (and what they key as) by where they were met
-  let roots = 0;
-  function boundValue(key, value) {
+  const met = new Map(); // the objects met so far, numbered in the order met
+  return function boundValue(key, value) {
     const raw = this[key];
     if (raw && typeof raw === "object" && !(raw instanceof Date)) { // React writes a Date by value
-      if (paths.has(raw)) return { $ref: paths.get(raw) };
-      const path = `${paths.has(this) ? paths.get(this) : `#${roots++}`}/${key}`;
-      const out = keyed.call(this, key, value);
-      paths.set(raw, path);
-      if (out && typeof out === "object") paths.set(out, path);
-      return out;
+      if (met.has(raw)) return { $ref: met.get(raw) };
+      met.set(raw, met.size);
     }
-    return keyed.call(this, key, value);
-  }
-  return boundValue;
-  function keyed(key, value) {
-    const raw = this[key];
     if (raw instanceof Date) return { $date: value };
     if (value === undefined) return { $undefined: true };
     if (typeof value === "number" && (!Number.isFinite(value) || Object.is(value, -0))) return { $number: Object.is(value, -0) ? "-0" : String(value) };
@@ -185,7 +175,7 @@ function boundReplacer(settled, pending, temporary = false) {
       );
     }
     return Object.keys(value).some((k) => k[0] === "$") ? { $object: Object.entries(value) } : value;
-  }
+  };
 }
 
 // Component types (functions, memo/forwardRef/context objects) by identity:
