@@ -133,6 +133,18 @@ function closedOver(fn, outer) {
   return [...out];
 }
 
+/** The name an anonymous function expression takes from the binding or property it is put in. */
+function inferredName(fn, parent) {
+  if (fn.id) return null;
+  if (parent.type === "VariableDeclarator" && parent.init === fn && parent.id.type === "Identifier") return parent.id.name;
+  if (parent.type === "AssignmentExpression" && parent.right === fn && parent.left.type === "Identifier") return parent.left.name;
+  if (parent.type === "AssignmentPattern" && parent.right === fn && parent.left.type === "Identifier") return parent.left.name;
+  if ((parent.type === "Property" || parent.type === "PropertyDefinition") && parent.value === fn && !parent.computed) {
+    return parent.key.type === "Identifier" ? parent.key.name : typeof parent.key.value === "string" ? parent.key.value : null;
+  }
+  return null;
+}
+
 const isMethod = (parent) =>
   !!parent && (parent.type === "MethodDefinition" || (parent.type === "Property" && (parent.method || parent.kind !== "init")));
 
@@ -161,6 +173,8 @@ function wrapEdits(fn, outer, parent, outerSwitch, id, directive) {
         const directives = parent.body.filter((s) => typeof s.directive === "string");
         const at = directives.length ? directives[directives.length - 1].end : parent.start + 1;
         edits.push({ at, end: at, text: ` ${text}` });
+      } else if (parent.type === "StaticBlock") {
+        edits.push({ at: parent.body[0].start, end: parent.body[0].start, text: `${text} ` });
       } else if (parent.type === "SwitchCase" && outerSwitch) {
         for (const c of outerSwitch.cases) {
           if (c.consequent.length) edits.push({ at: c.consequent[0].start, end: c.consequent[0].start, text: `${text} ` });
@@ -169,8 +183,11 @@ function wrapEdits(fn, outer, parent, outerSwitch, id, directive) {
         edits.push({ at: fn.end, end: fn.end, text: ` ${text}` });
       }
     } else {
-      // Ahead of the body's closing edits, which may share fn.end.
-      edits.push({ at: fn.end, end: fn.end, text: `${getter})` }, { at: fn.start, end: fn.start, text: `__vinext_cacheRef(${mark}` });
+      // Ahead of the body's closing edits, which may share fn.end. The
+      // wrapping hides the name fn would take from where it is put.
+      const name = inferredName(fn, parent);
+      const rest = name ? `${getter || ", null"}, ${JSON.stringify(name)}` : getter;
+      edits.push({ at: fn.end, end: fn.end, text: `${rest})` }, { at: fn.start, end: fn.start, text: `__vinext_cacheRef(${mark}` });
     }
   }
   const open = `__vinext_useCache(${JSON.stringify(id)}, ${args}, async () => `;

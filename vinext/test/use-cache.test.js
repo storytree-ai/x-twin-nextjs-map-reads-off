@@ -183,7 +183,7 @@ test("an inline cached function is marked, so another cached function may close 
   assert.match(
     out,
     new RegExp(
-      `const get = __vinext_cacheRef\\("m\\.js:${arrow.start}", async \\(\\) => \\{ return __vinext_useCache\\("m\\.js:${arrow.start}", \\[\\], async \\(\\) => \\{ return u; \\}, \\{ u \\}\\); \\}, \\(\\) => \\(\\{ u \\}\\)\\); \\}$`,
+      `const get = __vinext_cacheRef\\("m\\.js:${arrow.start}", async \\(\\) => \\{ return __vinext_useCache\\("m\\.js:${arrow.start}", \\[\\], async \\(\\) => \\{ return u; \\}, \\{ u \\}\\); \\}, \\(\\) => \\(\\{ u \\}\\), "get"\\); \\}$`,
     ),
   );
 });
@@ -293,11 +293,49 @@ test("closed-over elements of different memo or forwardRef components key apart"
   const element = (type) => ({ $$typeof: Symbol.for("react.transitional.element"), type, key: null, props: {} });
   const memo = (type) => ({ $$typeof: Symbol.for("react.memo"), type });
   const forwardRef = (render) => ({ $$typeof: Symbol.for("react.forward_ref"), render });
-  const A = function A() {};
-  const B = function B() {};
-  assert.equal(await run(element(memo(A))), 1);
-  assert.equal(await run(element(memo(A))), 1);
-  assert.equal(await run(element(memo(B))), 2);
-  assert.equal(await run(element(forwardRef(A))), 3);
-  assert.equal(await run(element(forwardRef(B))), 4);
+  // Each made once, as a module makes them.
+  const [memoA, memoB, refA, refB] = [memo(() => {}), memo(() => {}), forwardRef(() => {}), forwardRef(() => {})];
+  assert.equal(await run(element(memoA)), 1);
+  assert.equal(await run(element(memoA)), 1);
+  assert.equal(await run(element(memoB)), 2);
+  assert.equal(await run(element(refA)), 3);
+  assert.equal(await run(element(refA)), 3);
+  assert.equal(await run(element(refB)), 4);
+});
+
+test("closed-over elements of different components with one name key apart", async () => {
+  let calls = 0;
+  const run = (el) => __vinext_useCache("t:9", [], async () => ++calls, { el });
+  const element = (type) => ({ $$typeof: Symbol.for("react.transitional.element"), type, key: null, props: {} });
+  const cards = [0, 1].map(() => function Card() {});
+  assert.equal(await run(element(cards[0])), 1);
+  assert.equal(await run(element(cards[0])), 1);
+  assert.equal(await run(element(cards[1])), 2);
+});
+
+test("a closed-over value with toJSON keys as what toJSON gives, as React serializes it", async () => {
+  let calls = 0;
+  const run = (v) => __vinext_useCache("t:10", [], async () => ++calls, { v });
+  assert.equal(await run(new URL("https://x.test/a")), 1);
+  assert.equal(await run(new URL("https://x.test/a")), 1);
+  assert.equal(await run(new URL("https://x.test/b")), 2);
+});
+
+test("a marked function keeps the name it was given", () => {
+  const fn = __vinext_cacheRef("t:name", async () => {}, null, "Get");
+  assert.equal(fn.name, "Get");
+});
+
+test("a cached function declaration in a class static block is marked where the block starts", () => {
+  const code = 'function Page(u) { class C { static { C.x = 1; async function get() { "use cache"; return u; } } } }';
+  const start = code.indexOf("async function");
+  const body = { type: "BlockStatement", start: code.indexOf("{", start), end: code.indexOf("} }", start) + 1 };
+  const d = code.indexOf('"use cache";');
+  body.body = [{ type: "ExpressionStatement", directive: "use cache", start: d, end: d + 12 }, { type: "ReturnStatement", argument: I("u") }];
+  const get = { type: "FunctionDeclaration", async: true, id: I("get"), params: [], start, end: body.end, body };
+  const first = { type: "ExpressionStatement", start: code.indexOf("C.x"), end: code.indexOf("C.x") + 8, expression: { type: "Literal" } };
+  const cls = { type: "ClassDeclaration", id: I("C"), body: { type: "ClassBody", body: [{ type: "StaticBlock", start: code.indexOf("static"), body: [first, get] }] } };
+  const page = { type: "FunctionDeclaration", id: I("Page"), params: [I("u")], body: block([cls]) };
+  const out = transformUseCache(code, { type: "Program", body: [page] }, "k.js");
+  assert.match(out, new RegExp(`static \\{ __vinext_cacheRef\\("k\\.js:${start}", get, \\(\\) => \\(\\{ u \\}\\)\\); C\\.x = 1;`));
 });

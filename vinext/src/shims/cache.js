@@ -87,9 +87,10 @@ const currentEntry = () => (cacheContext() && cacheContext().getStore()) || scop
 // id and a getter for the values they close over.
 const cacheRefs = new WeakMap();
 
-/** Mark fn as the inline "use cache" function id. */
-export function __vinext_cacheRef(id, fn, closure) {
+/** Mark fn as the inline "use cache" function id (keeping the name its wrapping hid). */
+export function __vinext_cacheRef(id, fn, closure, name) {
   cacheRefs.set(fn, { id, closure });
+  if (name && !fn.name) Object.defineProperty(fn, "name", { value: name, configurable: true });
   return fn;
 }
 
@@ -163,14 +164,18 @@ function boundReplacer(settled, pending) {
   };
 }
 
-/** An element's type by name: a tag, a component, or what memo, forwardRef and the like wrap. */
+// Component types (functions, memo/forwardRef/context objects) by identity:
+// they are made once per module, so a type keys alike across requests.
+const typeIds = new WeakMap();
+let nextTypeId = 0;
+
+/** An element's type: a tag, a client reference's id, or a component by identity. */
 function elementType(type) {
   if (typeof type === "string") return type;
-  if (typeof type === "symbol" || !type) return String(type);
-  if (type.$$id || type.displayName || typeof type === "function") return type.$$id || type.displayName || type.name;
-  const inner = type.type || type.render;
-  const kind = typeof type.$$typeof === "symbol" ? Symbol.keyFor(type.$$typeof) : "";
-  return inner ? `${kind}(${elementType(inner)})` : kind;
+  if (!type || (typeof type !== "object" && typeof type !== "function")) return String(type);
+  if (type.$$id) return type.$$id;
+  if (!typeIds.has(type)) typeIds.set(type, nextTypeId++);
+  return `${type.displayName || type.name || ""}#${typeIds.get(type)}`;
 }
 
 /**
