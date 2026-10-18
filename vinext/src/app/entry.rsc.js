@@ -122,6 +122,10 @@ function redirectResponse(redirect) {
   return new Response(null, { status: redirect.status, headers: { location: redirect.url } });
 }
 
+// What React throws from use() on a pending promise: the component renders again later.
+const isSuspenseException = (err) =>
+  !!err && typeof err.message === "string" && err.message.startsWith("Suspense Exception");
+
 const isNavigationError = (err) => !!(parseRedirectError(err) || httpFallbackStatus(err));
 
 /** The RSC stream for a payload; onNavigationError hears notFound()/redirect() thrown while rendering. */
@@ -200,15 +204,28 @@ async function renderPage(request, url, match) {
   const pageSettled = new Promise((resolve) => (settle = resolve));
   let leaf = null;
   if (waitForPage) {
-    leaf = h(async function PageRunner() {
+    // A plain (not async) component calling the page in its own render, so
+    // hooks such as use() work; an async page's promise is returned as is.
+    const finish = (err) => settle(isNavigationError(err) ? err : null);
+    leaf = h(function PageRunner() {
+      let out;
       try {
-        const out = await Page(props);
-        settle(null);
-        return out;
+        out = Page(props);
       } catch (err) {
-        settle(isNavigationError(err) ? err : null);
+        if (!isSuspenseException(err)) finish(err);
         throw err;
       }
+      if (out && typeof out.then === "function") {
+        return out.then(
+          (value) => (finish(null), value),
+          (err) => {
+            finish(err);
+            throw err;
+          },
+        );
+      }
+      finish(null);
+      return out;
     });
   } else if (Page) {
     leaf = h(Page, props);
