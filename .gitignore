@@ -1,0 +1,4 @@
+node_modules/
+vinext/dist/
+*.tgz
+test-results/
