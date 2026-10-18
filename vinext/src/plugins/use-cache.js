@@ -83,7 +83,7 @@ function varNames(node, out) {
 /** The names a scope-making node binds, or null when it makes no scope. */
 function scopeNames(node, parent) {
   if (FUNCTION_TYPES.has(node.type)) {
-    const out = new Set();
+    const out = new Set(node.type === "ArrowFunctionExpression" ? [] : ["arguments"]);
     if (node.id && node.type === "FunctionExpression") out.add(node.id.name);
     for (const p of node.params) for (const n of boundNames(p)) out.add(n);
     if (node.body.type === "BlockStatement") lexicalNames(node.body.body, varNames(node.body, out));

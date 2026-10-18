@@ -379,3 +379,11 @@ test("a mark at the start of a case goes ahead of an edit at the same offset", (
   const out = transformUseCache(code, { type: "Program", body: [page] }, "v.js");
   assert.match(out, /case 2: __vinext_cacheRef\("v\.js:\d+", get, \(\) => \(\{ u \}\)\); __vinext_cacheRef\("v\.js:\d+", async/);
 });
+
+test("an arrow reading its enclosing function's arguments keys on them", () => {
+  const code = 'function Page() { const get = async () => { "use cache"; return arguments[0]; }; }';
+  const read = { type: "MemberExpression", computed: true, object: I("arguments"), property: { type: "Literal" } };
+  const arrow = cachedArrow(code, [{ type: "ReturnStatement", argument: read }]);
+  const page = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([decl("const", "get", arrow)]) };
+  assert.match(transformUseCache(code, { type: "Program", body: [page] }, "g.js"), /return arguments\[0\]; \}, \{ arguments \}\); \}/);
+});
