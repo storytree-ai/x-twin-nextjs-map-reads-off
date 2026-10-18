@@ -1,21 +1,21 @@
 // Pages Router API routes (pages/api/**) on Node's req/res, with the
 // Next.js helpers: req.query, req.cookies, req.body, res.status/json/send/redirect.
-import { searchToQuery } from "./pages-dev.js";
+import { searchToQuery } from "./request-utils.js";
 
 function parseCookies(header) {
-  const cookies = {};
+  const cookies = new Map();
   for (const part of (header || "").split(";")) {
     const i = part.indexOf("=");
     if (i > 0) {
       const v = part.slice(i + 1).trim();
       try {
-        cookies[part.slice(0, i).trim()] = decodeURIComponent(v);
+        cookies.set(part.slice(0, i).trim(), decodeURIComponent(v));
       } catch {
-        cookies[part.slice(0, i).trim()] = v;
+        cookies.set(part.slice(0, i).trim(), v);
       }
     }
   }
-  return cookies;
+  return Object.fromEntries(cookies);
 }
 
 function readBody(req) {

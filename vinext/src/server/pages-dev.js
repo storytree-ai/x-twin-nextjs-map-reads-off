@@ -7,18 +7,9 @@ import { shimPath } from "../shims/index.js";
 import { PAGES_CLIENT_URL } from "../client/pages-entry.js";
 import { handleApiRoute } from "./api.js";
 import { fillDocument } from "./document-html.js";
+import { searchToQuery, trailingSlashRedirect } from "./request-utils.js";
 
 const BUILD_ID = "development";
-
-/** Search params as a Next.js query object (repeated keys become arrays). */
-export function searchToQuery(searchParams) {
-  const query = {};
-  for (const [k, v] of searchParams) {
-    if (k in query) query[k] = [].concat(query[k], v);
-    else query[k] = v;
-  }
-  return query;
-}
 
 /** JSON safe to embed in a <script> element. */
 export function htmlSafeJson(value) {
@@ -51,9 +42,10 @@ export function createPagesDevHandler(server, ctx) {
     if (isInternalRequest(pathname)) return next();
 
     // Next.js strips trailing slashes by default.
-    if (pathname.length > 1 && pathname.endsWith("/") && !ctx.nextConfig.trailingSlash) {
+    const strippedLocation = ctx.nextConfig.trailingSlash ? null : trailingSlashRedirect(pathname, url.search);
+    if (strippedLocation) {
       res.statusCode = 308;
-      res.setHeader("Location", pathname.replace(/\/+$/, "") + url.search);
+      res.setHeader("Location", strippedLocation);
       return res.end();
     }
 
