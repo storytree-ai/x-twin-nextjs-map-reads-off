@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 # The arm's checks: CI runs this on every pull request and in the merge queue.
 # Install + build vinext, run its unit tests, then smoke test `vinext dev`
-# against a copy of apps/pages-basic.
+# against copies of apps/pages-basic and apps/app-basic.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VINEXT="$ROOT/vinext"
 PORT="${SMOKE_PORT:-3499}"
+APP_PORT="${SMOKE_APP_PORT:-3498}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/vinext-checks-XXXXXX")"
 SERVER_PID=""
+APP_SERVER_PID=""
 
 cleanup() {
-  if [ -n "$SERVER_PID" ]; then
-    kill -- "-$SERVER_PID" 2>/dev/null || kill "$SERVER_PID" 2>/dev/null || true
-  fi
+  for pid in "$SERVER_PID" "$APP_SERVER_PID"; do
+    if [ -n "$pid" ]; then
+      kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    fi
+  done
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -99,5 +103,52 @@ header location | grep -q "^/about" || fail "next.config redirect missing"
 [ "$(fetch /after-rewrite)" = "200" ] && grep -q "<h1>About</h1>" "$WORK/body.html" || fail "next.config afterFiles rewrite missing"
 [ "$(fetch /cjs/basic)" = "200" ] && grep -q "Random: <!-- -->4" "$WORK/body.html" || fail "CommonJS page did not render"
 grep -q 'data-testid="app-wrapper"' "$WORK/body.html" || fail "pages/_app did not wrap the page"
+
+echo "=== vinext: install into apps/app-basic ==="
+node "$ROOT/ci/fixture.mjs" app-basic "$TGZ" "$WORK/app-basic"
+cd "$WORK/app-basic"
+npm install --prefer-offline --offline=false --no-audit --no-fund
+
+echo "=== smoke: App Router, vinext dev -p $APP_PORT ==="
+setsid npx vinext dev -p "$APP_PORT" >"$WORK/app-dev.log" 2>&1 &
+APP_SERVER_PID=$!
+PORT="$APP_PORT"
+fail() { echo "FAIL: $1"; echo "--- app dev server log ---"; cat "$WORK/app-dev.log"; exit 1; }
+
+status=""
+for _ in $(seq 1 120); do
+  status="$(fetch /)"
+  [ "$status" = "200" ] && break
+  sleep 0.5
+done
+[ "$status" = "200" ] || fail "app GET / answered '$status', expected 200"
+grep -q "<h1>Welcome to App Router</h1>" "$WORK/body.html" || fail "app GET / did not render the server component"
+grep -q '<html lang="en">' "$WORK/body.html" || fail "app GET / is not wrapped in the root layout"
+grep -q "<title>App Basic</title>" "$WORK/body.html" || fail "app GET / has no metadata title"
+grep -q "__vinext_f" "$WORK/body.html" || fail "app GET / has no inline RSC payload"
+
+[ "$(fetch /blog/hello-world)" = "200" ] && grep -q "Slug: <!-- -->hello-world" "$WORK/body.html" || fail "app dynamic route did not render its param"
+[ "$(fetch /docs/a/b)" = "200" ] && grep -q "Path: <!-- -->a/b" "$WORK/body.html" || fail "app catch-all route did not render its segments"
+[ "$(fetch /interactive)" = "200" ] && grep -q 'data-testid="count"' "$WORK/body.html" || fail "client component was not server-rendered"
+[ "$(fetch /nonexistent-page)" = "404" ] && grep -q "404 - Page Not Found" "$WORK/body.html" || fail "unknown app route did not render not-found with 404"
+[ "$(fetch /dashboard/missing)" = "404" ] && grep -q "Dashboard: Page Not Found" "$WORK/body.html" || fail "notFound() did not render the nearest not-found with 404"
+headers /redirect-test
+header location | grep -q "^/about" || fail "redirect() did not answer a redirect to /about"
+
+[ "$(fetch /api/hello)" = "200" ] && grep -q '"message":"Hello from App Router API"' "$WORK/body.html" || fail "route handler GET did not answer JSON"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://localhost:$PORT/api/get-only")" = "405" ] || fail "missing route handler method did not answer 405"
+curl -s -D "$WORK/headers.txt" -o /dev/null -X OPTIONS "http://localhost:$PORT/api/methods"
+[ "$(header allow)" = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT" ] || fail "OPTIONS did not list the handler's methods"
+
+headers /api/static-data
+header cache-control | grep -q "s-maxage=1, stale-while-revalidate" || fail "route handler revalidate did not set s-maxage"
+headers /api/force-dynamic-revalidate
+header cache-control | grep -q "s-maxage" && fail "force-dynamic route handler was given s-maxage"
+headers /api/dynamic-request-headers
+header cache-control | grep -q "s-maxage" && fail "route handler reading the request was given s-maxage"
+[ "$(fetch /favicon.ico)" = "200" ] || fail "app/favicon.ico was not served"
+
+curl -s -H "RSC: 1" -D "$WORK/headers.txt" -o "$WORK/body.html" "http://localhost:$PORT/about"
+header content-type | grep -q "text/x-component" || fail "RSC request did not answer an RSC payload"
 
 echo "=== checks passed ==="

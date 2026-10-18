@@ -9,7 +9,7 @@ export const PAGE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
 const SPECIAL_PAGES = new Set(["/_app", "/_document", "/_error"]);
 
 /** Parse one route segment: static, [param], [...param] or [[...param]]. */
-function parseSegment(segment) {
+export function parseSegment(segment) {
   let m = /^\[\[\.\.\.([^\]]+)\]\]$/.exec(segment);
   if (m) return { type: "optional-catch-all", name: m[1] };
   m = /^\[\.\.\.([^\]]+)\]$/.exec(segment);

@@ -1,6 +1,7 @@
 // vinext: the Vite plugin that runs a Next.js app. It resolves next/* imports
-// to vinext's shims, loads next.config, and serves the Pages Router through
-// Vite's dev server.
+// to vinext's shims, loads next.config, and serves the Pages Router and
+// (through @vitejs/plugin-rsc's rsc/ssr/client environments) the App
+// Router through Vite's dev server.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectRouters } from "./config/project.js";
@@ -17,13 +18,21 @@ import { createPagesDevHandler } from "./server/pages-dev.js";
 import { scanPagesDir, PAGE_EXTENSIONS } from "./routing/pages-routes.js";
 import { transformCjs, CJS_HELPER_ID } from "./plugins/cjs.js";
 import { ensureInstrumentation } from "./server/instrumentation.js";
+import { createAppDevHandler } from "./server/app-dev.js";
+import { APP_ROUTES_ID, RESOLVED_APP_ROUTES_ID, generateAppRoutesModule } from "./app/routes-module.js";
 
 const REQUEST_CONTEXT_ID = "vinext/unified-request-context";
+const EMPTY_MODULE_ID = "\0vinext:empty";
 
 export { loadNextConfig } from "./config/next-config.js";
 
 const NEXT_IDS = Object.keys(SHIM_FILES);
 const VINEXT_DIR = path.dirname(fileURLToPath(import.meta.url)) + path.sep;
+const APP_ENTRIES = {
+  rsc: path.join(VINEXT_DIR, "app", "entry.rsc.js"),
+  ssr: path.join(VINEXT_DIR, "app", "entry.ssr.js"),
+  client: path.join(VINEXT_DIR, "app", "entry.browser.js"),
+};
 
 export default function vinext(options = {}) {
   const ctx = {
@@ -64,6 +73,8 @@ export default function vinext(options = {}) {
       return {
         appType: "custom",
         define,
+        // Vite's CORS middleware would answer OPTIONS before route handlers.
+        server: { cors: false },
         resolve: {
           dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
           // tsconfig "paths" (e.g. "@/*"), as Next.js honours them.
@@ -80,8 +91,16 @@ export default function vinext(options = {}) {
       };
     },
 
-    resolveId(id, importer) {
+    resolveId(id, importer, options) {
       if (id === PAGES_CLIENT_ID) return RESOLVED_PAGES_CLIENT_ID;
+      // plugin-rsc answers server-only/client-only per environment; the
+      // dependency scan only needs them to resolve.
+      if ((id === "server-only" || id === "client-only") && options && options.scan) return EMPTY_MODULE_ID;
+      if (id === APP_ROUTES_ID) return RESOLVED_APP_ROUTES_ID;
+      // Server components get next/navigation without client hooks' state.
+      if ((id === "next/navigation" || id === "next/navigation.js") && this.environment?.name === "rsc") {
+        return path.join(VINEXT_DIR, "shims", "navigation.react-server.js");
+      }
       // Imports between vinext's own modules resolve here, so they get the
       // same URL as the shims the app imports through next/*: Vite's own
       // resolver would add a ?v= query to these node_modules paths and the
@@ -105,6 +124,8 @@ export default function vinext(options = {}) {
         const scan = ctx.pagesDir ? scanPagesDir(ctx.pagesDir) : { pages: [], special: {} };
         return generatePagesClientEntry(ctx.root, scan);
       }
+      if (id === RESOLVED_APP_ROUTES_ID) return generateAppRoutesModule(ctx.appDir);
+      if (id === EMPTY_MODULE_ID) return "export {};";
       return null;
     },
 
@@ -120,10 +141,17 @@ export default function vinext(options = {}) {
 
     configureServer(server) {
       // New or removed pages change the client entry's page map.
+      // New or removed app/ files change the App Router's route table.
       const refresh = (file) => {
-        if (!ctx.pagesDir || !file.startsWith(ctx.pagesDir)) return;
-        const mod = server.moduleGraph.getModuleById(RESOLVED_PAGES_CLIENT_ID);
-        if (mod) server.moduleGraph.invalidateModule(mod);
+        if (ctx.pagesDir && file.startsWith(ctx.pagesDir)) {
+          const mod = server.moduleGraph.getModuleById(RESOLVED_PAGES_CLIENT_ID);
+          if (mod) server.moduleGraph.invalidateModule(mod);
+        }
+        const rsc = server.environments.rsc;
+        if (ctx.appDir && rsc && file.startsWith(ctx.appDir)) {
+          const mod = rsc.moduleGraph.getModuleById(RESOLVED_APP_ROUTES_ID);
+          if (mod) rsc.moduleGraph.invalidateModule(mod);
+        }
       };
       server.watcher.on("add", refresh);
       server.watcher.on("unlink", refresh);
@@ -134,6 +162,9 @@ export default function vinext(options = {}) {
           ensureInstrumentation(server, ctx).then(() => next(), next);
         });
         if (ctx.pagesDir) server.middlewares.use(createPagesDevHandler(server, ctx));
+        if (ctx.appDir && server.environments.rsc) {
+          server.middlewares.use(createAppDevHandler(server, ctx, APP_ENTRIES.rsc));
+        }
         server.middlewares.use((req, res) => {
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -148,5 +179,18 @@ export default function vinext(options = {}) {
     () => [],
   );
 
-  return [reactPlugin, core];
+  // The App Router's environments, when the project has an app/ directory
+  // (vinext({ appDir }) names the project root, as in Next.js's fixtures).
+  const projectRoot = path.resolve(options.appDir || process.cwd());
+  const rscPlugin = detectRouters(projectRoot).appDir
+    ? import("@vitejs/plugin-rsc").then(
+        (m) => m.default({ serverHandler: false, entries: APP_ENTRIES }),
+        (err) => {
+          console.warn(`[vinext] app/ needs @vitejs/plugin-rsc: ${err.message}`);
+          return [];
+        },
+      )
+    : [];
+
+  return [reactPlugin, rscPlugin, core];
 }

@@ -13,6 +13,10 @@ function emptyState() {
   return { pathname: "/", query: {}, asPath: "/", isFallback: false };
 }
 
+// One empty state, so useSyncExternalStore sees a stable snapshot when no
+// Pages Router state was ever set (e.g. next/navigation under the App Router).
+const EMPTY = Object.freeze(emptyState());
+
 // The dev server renders each request inside an AsyncLocalStorage it keeps
 // on globalThis (server/ssr-context.js), so concurrent renders keep their
 // own router state; ssrState is the fallback outside one.
@@ -24,9 +28,9 @@ function requestStore() {
 export function getRouterState() {
   if (isServer) {
     const store = requestStore();
-    return (store && store.router) || ssrState || emptyState();
+    return (store && store.router) || ssrState || EMPTY;
   }
-  return clientState || emptyState();
+  return clientState || EMPTY;
 }
 
 export function setSSRContext(ctx) {

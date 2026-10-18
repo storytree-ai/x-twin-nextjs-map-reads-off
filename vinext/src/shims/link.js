@@ -1,5 +1,7 @@
+"use client";
 // next/link: an anchor for href (string or { pathname, query }) whose
-// clicks become client-side transitions through next/router.
+// clicks become client-side transitions: through the App Router when one
+// is mounted, else through next/router.
 import { createElement, forwardRef, Children, isValidElement, cloneElement } from "react";
 import Router, { resolveHref } from "./router.js";
 
@@ -57,6 +59,11 @@ const Link = forwardRef(function Link(props, ref) {
         },
       });
       if (prevented) return;
+    }
+    const appRouter = window.__VINEXT_APP_ROUTER__;
+    if (appRouter) {
+      (replace ? appRouter.replace : appRouter.push)(shown, { scroll });
+      return;
     }
     const navigate = replace ? Router.replace : Router.push;
     navigate(href, as, { shallow, scroll, locale });

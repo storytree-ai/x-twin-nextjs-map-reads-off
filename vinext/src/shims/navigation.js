@@ -1,49 +1,50 @@
-// next/navigation hooks over the shared router state (the App Router
-// increment gives them their own source).
-import { useMemo } from "react";
+// next/navigation hooks for client components. Under the App Router they
+// read its navigation state (AppNavContext, provided by the SSR entry and
+// the browser's app router); in a Pages Router app they fall back to the
+// shared next/router state.
+import { useContext, useMemo } from "react";
 import { useRouterState } from "./router-state.js";
 import Router from "./router.js";
+import { AppNavContext } from "./app-nav-context.js";
+import { ReadonlyURLSearchParams } from "./navigation-shared.js";
 
-export class ReadonlyURLSearchParams extends URLSearchParams {
-  append() {
-    throw new Error("ReadonlyURLSearchParams cannot be modified");
-  }
-  delete() {
-    throw new Error("ReadonlyURLSearchParams cannot be modified");
-  }
-  set() {
-    throw new Error("ReadonlyURLSearchParams cannot be modified");
-  }
-  sort() {
-    throw new Error("ReadonlyURLSearchParams cannot be modified");
-  }
+export * from "./navigation-shared.js";
+
+function pagesSearch(asPath) {
+  return asPath.split("#")[0].split("?")[1] || "";
 }
 
 export function usePathname() {
-  return useRouterState().asPath.split(/[?#]/)[0];
+  const app = useContext(AppNavContext);
+  const pages = useRouterState();
+  return app ? app.pathname : pages.asPath.split(/[?#]/)[0];
 }
 
 export function useSearchParams() {
-  const { asPath } = useRouterState();
-  return useMemo(() => new ReadonlyURLSearchParams(asPath.split("#")[0].split("?")[1] || ""), [asPath]);
+  const app = useContext(AppNavContext);
+  const pages = useRouterState();
+  const search = app ? app.search : pagesSearch(pages.asPath);
+  return useMemo(() => new ReadonlyURLSearchParams(search), [search]);
 }
 
 export function useParams() {
-  return useRouterState().query;
+  const app = useContext(AppNavContext);
+  const pages = useRouterState();
+  return app ? app.params : pages.query;
 }
 
+const pagesRouter = {
+  push: (href) => Router.push(href),
+  replace: (href) => Router.replace(href),
+  back: () => Router.back(),
+  forward: () => Router.forward(),
+  refresh: () => Router.reload(),
+  prefetch: () => Promise.resolve(),
+};
+
 export function useRouter() {
-  return useMemo(
-    () => ({
-      push: (href) => Router.push(href),
-      replace: (href) => Router.replace(href),
-      back: () => Router.back(),
-      forward: () => Router.forward(),
-      refresh: () => Router.reload(),
-      prefetch: () => {},
-    }),
-    [],
-  );
+  const app = useContext(AppNavContext);
+  return app ? app.router : pagesRouter;
 }
 
 export function useSelectedLayoutSegment() {
@@ -52,30 +53,4 @@ export function useSelectedLayoutSegment() {
 
 export function useSelectedLayoutSegments() {
   return [];
-}
-
-function navError(digest, message) {
-  const err = new Error(message);
-  err.digest = digest;
-  return err;
-}
-
-export function redirect(url, type = "replace") {
-  throw navError(`NEXT_REDIRECT;${type};${url};307;`, "NEXT_REDIRECT");
-}
-
-export function permanentRedirect(url, type = "replace") {
-  throw navError(`NEXT_REDIRECT;${type};${url};308;`, "NEXT_REDIRECT");
-}
-
-export function notFound() {
-  throw navError("NEXT_HTTP_ERROR_FALLBACK;404", "NEXT_NOT_FOUND");
-}
-
-export function forbidden() {
-  throw navError("NEXT_HTTP_ERROR_FALLBACK;403", "NEXT_FORBIDDEN");
-}
-
-export function unauthorized() {
-  throw navError("NEXT_HTTP_ERROR_FALLBACK;401", "NEXT_UNAUTHORIZED");
 }
