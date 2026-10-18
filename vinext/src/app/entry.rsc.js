@@ -122,20 +122,39 @@ function redirectResponse(redirect) {
   return new Response(null, { status: redirect.status, headers: { location: redirect.url } });
 }
 
-async function renderPayload(request, url, payload, status, nav) {
-  const isRsc = request.headers.get("rsc") === "1";
-  const rscStream = renderToReadableStream(payload, {
+const isNavigationError = (err) => !!(parseRedirectError(err) || httpFallbackStatus(err));
+
+/** The RSC stream for a payload; onNavigationError hears notFound()/redirect() thrown while rendering. */
+function renderRsc(payload, isRsc, onNavigationError) {
+  return renderToReadableStream(payload, {
     onError(err) {
+      if (isNavigationError(err)) {
+        if (onNavigationError) onNavigationError(err);
+        return err.digest;
+      }
       if (err && typeof err === "object" && typeof err.digest === "string") return err.digest;
       if (!isRsc) console.error(err);
     },
   });
-  if (isRsc) {
+}
+
+async function respond(request, rscStream, status, nav) {
+  if (request.headers.get("rsc") === "1") {
     return new Response(rscStream, { status, headers: { "content-type": RSC_CONTENT_TYPE, vary: "RSC" } });
   }
   const ssr = await import.meta.viteRsc.loadModule("ssr", "index");
   const html = await ssr.renderHtml(rscStream, nav);
   return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", vary: "RSC" } });
+}
+
+/** A promise that resolves once stream has been read to its end (or failed). */
+function drained(stream) {
+  return (async () => {
+    const reader = stream.getReader();
+    try {
+      while (!(await reader.read()).done);
+    } catch {}
+  })();
 }
 
 async function renderPage(request, url, match) {
@@ -146,10 +165,13 @@ async function renderPage(request, url, match) {
   const mods = await loadLevels(levels);
   const nav = { pathname, search: url.search.slice(1), params };
   const searchParams = searchToObject(url.searchParams);
+  const isRsc = request.headers.get("rsc") === "1";
+  const renderFallback = (status, from, meta) =>
+    respond(request, renderRsc({ tree: fallbackTree(status, mods, from, params, pathname, meta), params }, isRsc), status, nav);
 
   if (!route) {
     const meta = renderMetadata(await resolveMetadata(mods.map((m) => m.layout), [], params, searchParams));
-    return renderPayload(request, url, { tree: fallbackTree(404, mods, 0, params, pathname, meta), params }, 404, nav);
+    return renderFallback(404, 0, meta);
   }
 
   const pageMod = await route.module();
@@ -157,43 +179,70 @@ async function renderPage(request, url, match) {
   const props = { params: thenable(params), searchParams: thenable(searchParams) };
   const leafIndex = mods.length - 1;
   let meta = [];
-  let leaf;
   try {
-    const metadata = await resolveMetadata(
-      mods.map((m) => m.layout),
-      mods.map((m) => m.paramNames),
-      params,
-      searchParams,
-      pageMod,
+    meta = renderMetadata(
+      await resolveMetadata(mods.map((m) => m.layout), mods.map((m) => m.paramNames), params, searchParams, pageMod),
     );
-    meta = renderMetadata(metadata);
-    // Run the page up front where its status can still be chosen: a
-    // notFound() or redirect() there answers 404 / 307 instead of a
-    // streamed boundary. Under a loading.tsx the page streams instead.
-    const canProbe = typeof Page === "function" && !isClientReference(Page) && !mods.some((m) => m.loading);
-    if (canProbe) {
-      try {
-        leaf = await Page(props);
-      } catch (err) {
-        if (parseRedirectError(err) || httpFallbackStatus(err)) throw err;
-        leaf = h(Page, props); // render it again in place so its error boundary shows the error
-      }
-    } else {
-      leaf = Page ? h(Page, props) : null;
-    }
   } catch (err) {
     const redirect = parseRedirectError(err);
     if (redirect) return redirectResponse(redirect);
     const status = httpFallbackStatus(err);
     if (!status) throw err;
-    const tree = fallbackTree(status, mods, leafIndex, params, pathname, meta);
-    return renderPayload(request, url, { tree, params }, status, nav);
+    return renderFallback(status, leafIndex, meta);
   }
-  const tree = wrapLevels(h(Fragment, null, ...meta, leaf ?? null), mods, leafIndex, params, pathname);
-  return renderPayload(request, url, { tree, params }, 200, nav);
+
+  // The response status waits for the page itself (it runs once, inside
+  // the render): a notFound() or redirect() thrown by it or its layouts
+  // answers 404 / 307 instead of a streamed boundary. Under a loading.tsx
+  // the page streams, as in Next.js.
+  const waitForPage = typeof Page === "function" && !isClientReference(Page) && !mods.some((m) => m.loading);
+  let settle = () => {};
+  const pageSettled = new Promise((resolve) => (settle = resolve));
+  let leaf = null;
+  if (waitForPage) {
+    leaf = h(async function PageRunner() {
+      try {
+        const out = await Page(props);
+        settle(null);
+        return out;
+      } catch (err) {
+        settle(isNavigationError(err) ? err : null);
+        throw err;
+      }
+    });
+  } else if (Page) {
+    leaf = h(Page, props);
+  }
+  const tree = wrapLevels(h(Fragment, null, ...meta, leaf), mods, leafIndex, params, pathname);
+  const stream = renderRsc({ tree, params }, isRsc, (err) => settle(err));
+  if (!waitForPage) return respond(request, stream, 200, nav);
+
+  const [out, watch] = stream.tee();
+  const navError = await Promise.race([pageSettled, drained(watch).then(() => null)]);
+  if (navError) {
+    out.cancel().catch(() => {});
+    const redirect = parseRedirectError(navError);
+    if (redirect) return redirectResponse(redirect);
+    return renderFallback(httpFallbackStatus(navError), leafIndex, meta);
+  }
+  return respond(request, out, 200, nav);
 }
 
-async function handleRoute(request, match) {
+// Reading the request (its headers, URL, cookies or body) makes a route
+// handler dynamic, as headers() and cookies() do: it is not cacheable.
+const REQUEST_READS = new Set(["headers", "url", "nextUrl", "cookies", "body", "json", "text", "formData", "arrayBuffer", "blob", "bytes"]);
+
+function trackRequestReads(request, store) {
+  return new Proxy(request, {
+    get(target, prop) {
+      if (REQUEST_READS.has(prop)) store.dynamicUsed = true;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+async function handleRoute(request, match, store) {
   const mod = await match.route.module();
   const method = request.method.toUpperCase();
   const exported = HTTP_METHODS.filter((m) => typeof mod[m] === "function");
@@ -210,7 +259,7 @@ async function handleRoute(request, match) {
   }
   let response;
   try {
-    response = await fn(new NextRequest(request), { params: thenable(match.params) });
+    response = await fn(trackRequestReads(new NextRequest(request), store), { params: thenable(match.params) });
   } catch (err) {
     const redirect = parseRedirectError(err);
     if (redirect) return redirectResponse(redirect);
@@ -226,6 +275,8 @@ async function handleRoute(request, match) {
   const headers = new Headers(response.headers);
   if (
     (method === "GET" || method === "HEAD") &&
+    mod.dynamic !== "force-dynamic" &&
+    !store.dynamicUsed &&
     typeof mod.revalidate === "number" &&
     mod.revalidate > 0 &&
     mod.revalidate !== Infinity &&
@@ -251,7 +302,7 @@ export default function handler(request) {
     const url = new URL(request.url);
     const match = matchRoute(routes, url.pathname);
     const response =
-      match && match.route.kind === "route" ? await handleRoute(request, match) : await renderPage(request, url, match);
+      match && match.route.kind === "route" ? await handleRoute(request, match, store.appRequest) : await renderPage(request, url, match);
     return withCookies(response, takeSetCookies(store.appRequest));
   });
 }

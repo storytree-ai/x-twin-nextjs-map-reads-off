@@ -59,6 +59,7 @@ function readonlyHeaders(source) {
 export async function headers() {
   const store = requestStore();
   if (!store) return fallbackHeaders;
+  store.dynamicUsed = true;
   return (store.readonlyHeaders ??= readonlyHeaders(store.headers));
 }
 
@@ -97,7 +98,9 @@ function cookieStore(store) {
 }
 
 export async function cookies() {
-  return cookieStore(requestStore());
+  const store = requestStore();
+  if (store) store.dynamicUsed = true;
+  return cookieStore(store);
 }
 
 /** The per-request state headers()/cookies() read, for the App Router. */

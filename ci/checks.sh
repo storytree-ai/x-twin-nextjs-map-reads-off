@@ -140,6 +140,14 @@ header location | grep -q "^/about" || fail "redirect() did not answer a redirec
 curl -s -D "$WORK/headers.txt" -o /dev/null -X OPTIONS "http://localhost:$PORT/api/methods"
 [ "$(header allow)" = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT" ] || fail "OPTIONS did not list the handler's methods"
 
+headers /api/static-data
+header cache-control | grep -q "s-maxage=1, stale-while-revalidate" || fail "route handler revalidate did not set s-maxage"
+headers /api/force-dynamic-revalidate
+header cache-control | grep -q "s-maxage" && fail "force-dynamic route handler was given s-maxage"
+headers /api/dynamic-request-headers
+header cache-control | grep -q "s-maxage" && fail "route handler reading the request was given s-maxage"
+[ "$(fetch /favicon.ico)" = "200" ] || fail "app/favicon.ico was not served"
+
 curl -s -H "RSC: 1" -D "$WORK/headers.txt" -o "$WORK/body.html" "http://localhost:$PORT/about"
 header content-type | grep -q "text/x-component" || fail "RSC request did not answer an RSC payload"
 
