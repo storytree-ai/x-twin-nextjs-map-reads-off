@@ -156,6 +156,10 @@ export default function vinext(options = {}) {
       };
       server.watcher.on("add", refresh);
       server.watcher.on("unlink", refresh);
+      // A generated icon's link carries a hash of its source.
+      server.watcher.on("change", (file) => {
+        if (ctx.appDir && path.dirname(file) === ctx.appDir && /^(apple-)?icon\.[jt]sx?$/.test(path.basename(file))) refresh(file);
+      });
 
       // Runs after Vite's own middlewares (assets, transforms, HMR).
       return () => {

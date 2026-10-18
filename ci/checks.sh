@@ -188,4 +188,15 @@ first="$(grep -oE 'data-testid="data-value">[0-9]+' "$WORK/body.html")"
 fetch /use-cache-fn-test >/dev/null
 [ -n "$first" ] && [ "$first" = "$(grep -oE 'data-testid="data-value">[0-9]+' "$WORK/body.html")" ] || fail "\"use cache\" function was not cached"
 
+# next/og: ImageResponse route handlers and app/icon.tsx.
+png_size() { od -An -tu1 -j16 -N8 "$WORK/body.html" | awk '{ printf "%dx%d", ($1*16777216)+($2*65536)+($3*256)+$4, ($5*16777216)+($6*65536)+($7*256)+$8 }'; }
+headers "/api/og?title=Smoke"
+header content-type | grep -q "^image/png" || fail "/api/og did not answer image/png"
+[ "$(png_size)" = "1200x630" ] || fail "/api/og is not a 1200x630 PNG"
+headers /icon
+header content-type | grep -q "^image/png" || fail "app/icon.tsx was not served at /icon"
+[ "$(png_size)" = "32x32" ] || fail "/icon is not a 32x32 PNG"
+fetch / >/dev/null
+grep -qE '<link rel="icon" href="/icon\?[0-9a-f]+" type="image/png"/>' "$WORK/body.html" || fail "pages do not link app/icon.tsx"
+
 echo "=== checks passed ==="
