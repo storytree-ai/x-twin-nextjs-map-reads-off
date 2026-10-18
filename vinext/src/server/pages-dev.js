@@ -240,7 +240,8 @@ export function createPagesDevHandler(server, ctx) {
       const asPath = isData ? pathname + url.search : url.pathname + url.search;
       const page = target && target.kind === "page" ? target.match : null;
       if (!page && ctx.appDir && !isData) {
-        req.url = pathname + queryToSearch(query);
+        // A rewrite (or a .rsc URL) changed the path or query the app sees.
+        if (pathname !== url.pathname || query !== original.query) req.url = pathname + queryToSearch(query);
         req.vinextStatus = rewriteStatus;
         return next();
       }
