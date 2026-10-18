@@ -82,7 +82,9 @@ function AppRouter({ initialPayload }) {
       const id = ++navId;
       let response;
       try {
-        response = await fetch(target.pathname + target.search, { headers: { RSC: "1" } });
+        // The page being left, so the server can apply intercepting routes.
+        const from = mode === "refresh" || mode === "pop" ? target.pathname : window.location.pathname;
+        response = await fetch(target.pathname + target.search, { headers: { RSC: "1", "x-vinext-from": from } });
       } catch {
         return hardNavigate(target.href);
       }

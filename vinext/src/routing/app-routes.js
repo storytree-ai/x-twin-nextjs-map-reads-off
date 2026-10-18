@@ -47,6 +47,7 @@ function scanDir(dir, segments, levels, out, name = "") {
     dir,
     segment: name,
     depth: segments.length,
+    segments,
     paramNames: segments.filter((s) => s.type !== "static").map((s) => s.name),
     slots: entries
       .filter((e) => e.isDirectory() && e.name.startsWith("@"))
@@ -110,6 +111,48 @@ function assignSlots(route, slotScans) {
   return out;
 }
 
+const INTERCEPT = /^(\(\.\.\.\)|(?:\(\.\.\))+|\(\.\))(.+)$/;
+
+/**
+ * The intercepting folders inside a slot ("(.)x" from the slot's segment,
+ * "(..)x" one segment up per "(..)", "(...)x" from app/): each page under
+ * one intercepts its URL when navigating client-side from within the
+ * slot's level.
+ */
+function scanInterceptions(slot, level, out) {
+  const walk = (dir, segments) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const m = INTERCEPT.exec(e.name);
+      if (!m) {
+        if (!isRoutable(e.name)) continue;
+        const seg = urlSegment(e.name);
+        walk(path.join(dir, e.name), seg === null ? segments : [...segments, { ...parseSegment(seg), raw: seg }]);
+        continue;
+      }
+      let base;
+      if (m[1] === "(...)") base = [];
+      else if (m[1] === "(.)") base = segments;
+      else base = segments.slice(0, Math.max(0, segments.length - m[1].length / 4));
+      const seg = urlSegment(m[2]);
+      const start = seg === null ? base : [...base, { ...parseSegment(seg), raw: seg }];
+      const pages = [];
+      scanDir(path.join(dir, e.name), start, [], pages, e.name);
+      for (const p of pages) {
+        if (p.kind !== "page") continue;
+        out.push({ pattern: p.pattern, segments: p.segments, file: p.file, levels: p.levels, slot: slot.name, sourceDir: level.dir });
+      }
+    }
+  };
+  walk(slot.dir, level.segments);
+}
+
 /** Scan app/: the routes sorted most specific first, and app/'s own level. */
 export function scanAppDir(appDir) {
   const routes = [];
@@ -133,7 +176,9 @@ export function scanAppDir(appDir) {
     }
   }
   for (const r of routes) r.slots = assignSlots(r, slotScans);
-  return { routes: sortRoutes(routes), root };
+  const interceptions = [];
+  for (const level of levels) for (const slot of level.slots) scanInterceptions(slot, level, interceptions);
+  return { routes: sortRoutes(routes), root, interceptions: sortRoutes(interceptions) };
 }
 
 /** The first route matching pathname, with its params, or null. */

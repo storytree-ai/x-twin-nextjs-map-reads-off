@@ -29,9 +29,24 @@ function exportedFunctions(program) {
   return out;
 }
 
+/** The names a parameter pattern binds. */
+function boundNames(pattern, out = []) {
+  if (!pattern) return out;
+  if (pattern.type === "Identifier") out.push(pattern.name);
+  else if (pattern.type === "AssignmentPattern") boundNames(pattern.left, out);
+  else if (pattern.type === "RestElement") boundNames(pattern.argument, out);
+  else if (pattern.type === "ArrayPattern") for (const el of pattern.elements) boundNames(el, out);
+  else if (pattern.type === "ObjectPattern") {
+    for (const p of pattern.properties) boundNames(p.type === "RestElement" ? p.argument : p.value, out);
+  }
+  return out;
+}
+
 /** The edits that send fn's body through the cache wrapper. */
 function wrapEdits(fn, id, directive) {
-  const args = fn.type === "ArrowFunctionExpression" ? "[]" : "Array.from(arguments)";
+  // Arrow functions have no `arguments`: their parameters' names key the entry.
+  const args =
+    fn.type === "ArrowFunctionExpression" ? `[${fn.params.flatMap((p) => boundNames(p)).join(", ")}]` : "Array.from(arguments)";
   const open = `__vinext_useCache(${JSON.stringify(id)}, ${args}, async () => `;
   if (fn.body.type !== "BlockStatement") {
     return [

@@ -122,3 +122,27 @@ test("each level knows its folder name, for useSelectedLayoutSegments", () => {
   const r = match("/features").route;
   assert.deepEqual(r.levels.map((l) => l.segment), ["", "(marketing)", "features"]);
 });
+
+test("intercepting folders in a slot cover the URLs they name, from the slot's level", () => {
+  const dir = makeApp([
+    "layout.tsx",
+    "feed/layout.tsx",
+    "feed/page.tsx",
+    "feed/@modal/default.tsx",
+    "feed/@modal/(...)photos/[id]/page.tsx",
+    "feed/@modal/(.)item/[n]/page.tsx",
+    "photos/[id]/page.tsx",
+  ]);
+  const { routes, interceptions } = scanAppDir(dir);
+  const byPattern = Object.fromEntries(interceptions.map((i) => [i.pattern, i]));
+  assert.deepEqual(Object.keys(byPattern).sort(), ["/feed/item/[n]", "/photos/[id]"]);
+  const photo = byPattern["/photos/[id]"];
+  assert.equal(photo.slot, "modal");
+  assert.equal(photo.sourceDir, path.join(dir, "feed"));
+  assert.equal(path.relative(dir, photo.file), path.join("feed", "@modal", "(...)photos", "[id]", "page.tsx"));
+  assert.deepEqual(matchAppRoute(interceptions, "/photos/7").params, { id: "7" });
+  // Intercepting folders are not routes of their own; the real page still is.
+  assert.equal(matchAppRoute(routes, "/photos/7").route.pattern, "/photos/[id]");
+  assert.equal(matchAppRoute(routes, "/feed/item/1"), null);
+  assert.ok(matchAppRoute(routes, "/feed").route.levels.some((l) => l.dir === photo.sourceDir));
+});

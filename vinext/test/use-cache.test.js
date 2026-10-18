@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import assert from "node:assert/strict";
 import { transformUseCache } from "../src/plugins/use-cache.js";
 import { __vinext_useCache, cacheLife, cacheTag, revalidateTag } from "../src/shims/cache.js";
@@ -23,6 +24,19 @@ test("a function-level 'use cache' body runs through the cache wrapper", () => {
   );
 });
 
+test("an arrow function's parameters key its cache entry", () => {
+  // const get = async (id, { lang = "en" }) => { "use cache"; return id; }
+  const code = 'const get = async (id, { lang = "en" }) => { "use cache"; return id; }';
+  const ast = fnAst(code);
+  const fn = ast.body[0];
+  fn.type = "ArrowFunctionExpression";
+  fn.params = [
+    { type: "Identifier", name: "id" },
+    { type: "ObjectPattern", properties: [{ type: "Property", value: { type: "AssignmentPattern", left: { type: "Identifier", name: "lang" } } }] },
+  ];
+  assert.match(transformUseCache(code, ast, "a.ts"), /__vinext_useCache\("a\.ts:0", \[id, lang\], async/);
+});
+
 test("files without the directive are left alone", () => {
   const code = "async function f() { return 1; }";
   assert.equal(transformUseCache(code, { type: "Program", body: [] }, "x.ts"), null);
@@ -42,4 +56,19 @@ test("cached results are reused until their cacheLife revalidate passes, and dro
   assert.equal(await run(), 2);
   revalidateTag("tag-a");
   assert.equal(await run(), 3);
+});
+
+test("cacheTag and cacheLife still apply after an await", async () => {
+  globalThis.__VINEXT_SSR_ALS__ ??= new AsyncLocalStorage();
+  let calls = 0;
+  const run = () =>
+    __vinext_useCache("t:2", [], async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      cacheTag("late-tag");
+      return ++calls;
+    });
+  assert.equal(await run(), 1);
+  assert.equal(await run(), 1);
+  revalidateTag("late-tag");
+  assert.equal(await run(), 2);
 });

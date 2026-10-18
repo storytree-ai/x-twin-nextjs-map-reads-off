@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { reportRequestError } from "./instrumentation.js";
+import { parseRequestTarget } from "./request-utils.js";
 
 function isInternalRequest(pathname) {
   return pathname.startsWith("/@") || pathname.startsWith("/__vite") || pathname.startsWith("/node_modules/");
@@ -41,7 +42,7 @@ function serveStaticMetadata(appDir, pathname, res) {
 /** A Web Request for a Node request (the body streamed for non-GET/HEAD). */
 export function toWebRequest(req) {
   const host = req.headers.host || "localhost";
-  const url = new URL(`http://${host}${req.url || "/"}`);
+  const url = parseRequestTarget(req.url, host);
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) {
     if (k.startsWith(":") || v === undefined) continue;
@@ -86,7 +87,7 @@ export function createAppDevHandler(server, ctx, entryFile) {
   return async function vinextApp(req, res, next) {
     let pathname;
     try {
-      pathname = new URL("http://localhost" + (req.url || "/")).pathname;
+      pathname = parseRequestTarget(req.url).pathname;
     } catch {
       return next();
     }

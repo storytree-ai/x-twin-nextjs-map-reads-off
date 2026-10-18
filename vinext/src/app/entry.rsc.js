@@ -12,7 +12,7 @@ import {
   decodeFormState,
   loadServerAction,
 } from "@vitejs/plugin-rsc/rsc";
-import { routes, rootLevel, fileIcons, metadataRoutes } from "virtual:vinext/app-routes";
+import { routes, rootLevel, fileIcons, metadataRoutes, interceptions } from "virtual:vinext/app-routes";
 import { matchRoute } from "../routing/pages-routes.js";
 import { ErrorBoundary, NotFoundBoundary, LayoutSegments } from "./boundaries.js";
 import { httpFallbackStatus, parseRedirectError } from "../shims/navigation-shared.js";
@@ -33,6 +33,8 @@ const FALLBACK_TEXT = {
 const RSC_CONTENT_TYPE = "text/x-component; charset=utf-8";
 // The header a client-side server action call names its action in.
 const ACTION_HEADER = "x-rsc-action";
+// The page a client navigation leaves, for intercepting routes.
+const FROM_HEADER = "x-vinext-from";
 
 /** params as Next.js 15 passes them: a Promise that also has the values. */
 function thenable(value) {
@@ -258,7 +260,27 @@ function drained(stream) {
   })();
 }
 
-async function renderPage(request, url, match, { formState } = {}) {
+/**
+ * A client navigation from a page whose level holds a slot with an
+ * intercepting route for the target URL: that page renders again with the
+ * intercepting page in the slot. Returns { match, intercept } or null.
+ */
+function findInterception(request, url) {
+  const from = request.headers.get(FROM_HEADER);
+  if (request.headers.get("rsc") !== "1" || !from || from === url.pathname) return null;
+  const hit = matchRoute(interceptions, url.pathname);
+  if (!hit) return null;
+  const source = matchRoute(routes, from);
+  if (!source || source.route.kind !== "page") return null;
+  const levelIndex = source.route.levels.findIndex((l) => l.dir === hit.route.sourceDir);
+  if (levelIndex < 0) return null;
+  return {
+    match: { route: source.route, params: { ...source.params, ...hit.params } },
+    intercept: { levelIndex, slot: hit.route.slot, module: hit.route.module, levels: hit.route.levels },
+  };
+}
+
+async function renderPage(request, url, match, { formState, intercept } = {}) {
   const pathname = url.pathname;
   const params = match ? match.params : {};
   const route = match ? match.route : null;
@@ -346,6 +368,11 @@ async function renderPage(request, url, match, { formState } = {}) {
     leaf = h(Page, props);
   }
   const slots = await loadSlots(route.slots);
+  if (intercept) {
+    const own = (slots[intercept.levelIndex] || []).filter((s) => s.name !== intercept.slot);
+    const Component = (await intercept.module()).default;
+    slots[intercept.levelIndex] = [...own, { name: intercept.slot, Component, mods: await loadLevels(intercept.levels) }];
+  }
   const tree = wrapLevels(h(Fragment, null, ...meta, leaf), mods, leafIndex, params, pathname, { slots, pageProps: props });
   const stream = renderRsc({ tree, params, formState }, isRsc, (err) => settle(err));
   if (!waitForPage) return respond(request, stream, 200, nav, cacheControl());
@@ -506,7 +533,10 @@ export default function handler(request) {
       response = await handleAction(request, url, match, store.appRequest);
     } else {
       store.appRequest.phase = "render";
-      response = await renderPage(request, url, match);
+      const interception = findInterception(request, url);
+      response = interception
+        ? await renderPage(request, url, interception.match, { intercept: interception.intercept })
+        : await renderPage(request, url, match);
     }
     return withCookies(response, takeSetCookies(store.appRequest));
   });

@@ -68,7 +68,19 @@ const PROFILES = {
 };
 
 const useCacheEntries = (globalThis.__VINEXT_USE_CACHE__ ??= new Map());
-let scope = null; // the entry a "use cache" function is filling while it starts
+let scope = null; // the entry a "use cache" function is filling, without async context
+// The entry a "use cache" function is filling, across its awaits (an
+// AsyncLocalStorage made from the server's own, as this module also loads
+// where node:async_hooks cannot be imported).
+let cacheAls;
+function cacheContext() {
+  if (!cacheAls) {
+    const Als = globalThis.__VINEXT_SSR_ALS__ && globalThis.__VINEXT_SSR_ALS__.constructor;
+    if (Als) cacheAls = new Als();
+  }
+  return cacheAls || null;
+}
+const currentEntry = () => (cacheContext() && cacheContext().getStore()) || scope;
 
 function cacheKey(id, args) {
   try {
@@ -84,7 +96,7 @@ function fill(key, fn) {
   scope = entry;
   let result;
   try {
-    result = fn();
+    result = cacheContext() ? cacheContext().run(entry, fn) : fn();
   } finally {
     scope = prev;
   }
@@ -116,11 +128,13 @@ export function __vinext_useCache(id, args, fn) {
 }
 
 export function cacheLife(profile) {
-  if (!scope) return;
-  scope.life = typeof profile === "string" ? PROFILES[profile] || PROFILES.default : { ...PROFILES.default, ...profile };
+  const entry = currentEntry();
+  if (!entry) return;
+  entry.life = typeof profile === "string" ? PROFILES[profile] || PROFILES.default : { ...PROFILES.default, ...profile };
 }
 
 export function cacheTag(...tags) {
-  if (scope) scope.tags.push(...tags);
+  const entry = currentEntry();
+  if (entry) entry.tags.push(...tags);
 }
 export { cacheLife as unstable_cacheLife, cacheTag as unstable_cacheTag };

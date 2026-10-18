@@ -12,7 +12,7 @@ const lazy = (file) => (file ? `() => import(${JSON.stringify(file)})` : "null")
 
 function levelCode(level) {
   const files = LEVEL_KEYS.map((k) => `${k}: ${lazy(level[k])}`).join(", ");
-  return `{ paramNames: ${JSON.stringify(level.paramNames)}, segment: ${JSON.stringify(level.segment)}, ${files} }`;
+  return `{ paramNames: ${JSON.stringify(level.paramNames)}, segment: ${JSON.stringify(level.segment)}, dir: ${JSON.stringify(level.dir)}, ${files} }`;
 }
 
 function slotsCode(slots) {
@@ -25,8 +25,15 @@ function slotsCode(slots) {
   return `{ ${entries.join(", ")} }`;
 }
 
+function interceptionCode(i) {
+  return (
+    `  { pattern: ${JSON.stringify(i.pattern)}, segments: ${JSON.stringify(i.segments)}, slot: ${JSON.stringify(i.slot)}, ` +
+    `sourceDir: ${JSON.stringify(i.sourceDir)}, module: ${lazy(i.file)}, levels: [${i.levels.map(levelCode).join(", ")}] }`
+  );
+}
+
 export function generateAppRoutesModule(appDir) {
-  const { routes, root } = scanAppDir(appDir);
+  const { routes, root, interceptions } = scanAppDir(appDir);
   const routeCode = routes.map(
     (r) =>
       `  { pattern: ${JSON.stringify(r.pattern)}, kind: ${JSON.stringify(r.kind)}, ` +
@@ -39,6 +46,7 @@ export function generateAppRoutesModule(appDir) {
   return (
     `export const routes = [\n${routeCode.join(",\n")}\n];\nexport const rootLevel = ${rootCode};\n` +
     `export const fileIcons = ${JSON.stringify(meta.icons)};\n` +
-    `export const metadataRoutes = [\n${metaRoutes.join(",\n")}\n];\n`
+    `export const metadataRoutes = [\n${metaRoutes.join(",\n")}\n];\n` +
+    `export const interceptions = [\n${interceptions.map(interceptionCode).join(",\n")}\n];\n`
   );
 }

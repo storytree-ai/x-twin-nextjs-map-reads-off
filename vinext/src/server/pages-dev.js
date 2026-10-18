@@ -13,7 +13,7 @@ import { shimPath } from "../shims/index.js";
 import { PAGES_CLIENT_URL } from "../client/pages-entry.js";
 import { handleApiRoute } from "./api.js";
 import { fillDocument } from "./document-html.js";
-import { searchToQuery, trailingSlashRedirect } from "./request-utils.js";
+import { searchToQuery, trailingSlashRedirect, parseRequestTarget } from "./request-utils.js";
 import { loadRules, collectHeaders, findRedirect, findRewrite } from "./config-rules.js";
 import { runMiddleware } from "./middleware.js";
 import { createIsrCache, isrCacheControl } from "./isr-cache.js";
@@ -139,8 +139,7 @@ export function createPagesDevHandler(server, ctx) {
   return async function vinextPages(req, res, next) {
     let url;
     try {
-      // Concatenated, so "//host/x" stays a path rather than becoming a host.
-      url = new URL("http://localhost" + (req.url || "/"));
+      url = parseRequestTarget(req.url);
     } catch {
       return next();
     }
