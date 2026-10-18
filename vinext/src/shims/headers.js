@@ -63,9 +63,17 @@ export async function headers() {
   return (store.readonlyHeaders ??= readonlyHeaders(store.headers));
 }
 
+const READONLY_COOKIES =
+  "Cookies can only be modified in a Server Action or Route Handler. Read more: https://nextjs.org/docs/app/api-reference/functions/cookies#options";
+
 function cookieStore(store) {
   const map = store ? store.cookies : parseCookies(fallbackHeaders.get("cookie"));
+  // While a page renders (phase "render") cookies are read-only.
+  const assertWritable = () => {
+    if (store && store.phase === "render") throw new Error(READONLY_COOKIES);
+  };
   const set = (name, value, options) => {
+    assertWritable();
     const c = typeof name === "object" ? { ...name } : { name, value, ...options };
     c.value = String(c.value ?? "");
     map.set(c.name, c.value);
@@ -86,6 +94,7 @@ function cookieStore(store) {
       return api;
     },
     delete(name) {
+      assertWritable();
       const opts = typeof name === "object" ? name : { name };
       map.delete(opts.name);
       if (store) store.setCookies.set(opts.name, { path: "/", ...opts, value: "", expires: 0 });
@@ -97,10 +106,19 @@ function cookieStore(store) {
   return api;
 }
 
-export async function cookies() {
+/** A Promise of value that also has value's own API, as Next.js 15's request APIs do. */
+function syncThenable(value) {
+  const promise = Promise.resolve(value);
+  for (const key of Reflect.ownKeys(value)) {
+    Object.defineProperty(promise, key, { get: () => value[key], enumerable: true });
+  }
+  return promise;
+}
+
+export function cookies() {
   const store = requestStore();
   if (store) store.dynamicUsed = true;
-  return cookieStore(store);
+  return syncThenable(cookieStore(store));
 }
 
 /** The per-request state headers()/cookies() read, for the App Router. */

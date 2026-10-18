@@ -31,6 +31,7 @@ export async function renderHtml(rscStream, nav) {
   const bootstrapScriptContent = await import.meta.viteRsc.loadBootstrapScriptContent("index");
   const html = await renderToReadableStream(h(Root), {
     bootstrapScriptContent,
+    formState: nav.formState || null,
     onError(err) {
       if (err && typeof err === "object" && typeof err.digest === "string") return err.digest;
       console.error(err);

@@ -4,7 +4,13 @@
 // transition; history and scroll follow once it commits.
 import { createElement as h, startTransition, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { hydrateRoot } from "react-dom/client";
-import { createFromFetch, createFromReadableStream } from "@vitejs/plugin-rsc/browser";
+import {
+  createFromFetch,
+  createFromReadableStream,
+  createTemporaryReferenceSet,
+  encodeReply,
+  setServerCallback,
+} from "@vitejs/plugin-rsc/browser";
 import { AppNavContext } from "../shims/app-nav-context.js";
 
 /** The inline flight chunks (see flight-inline.js) as a byte stream. */
@@ -44,6 +50,27 @@ const router = {
 function hardNavigate(href) {
   window.location.href = href;
 }
+
+// A server action called from the browser: POST its arguments to the
+// current URL, then follow its redirect() or refresh the page when it
+// revalidated, and hand its result (or throw its error) to the caller.
+setServerCallback(async (id, args) => {
+  const temporaryReferences = createTemporaryReferenceSet();
+  const response = fetch(currentUrl(), {
+    method: "POST",
+    headers: { "x-rsc-action": id, accept: "text/x-component" },
+    body: await encodeReply(args, { temporaryReferences }),
+  });
+  const payload = await createFromFetch(response, { temporaryReferences });
+  if (payload.redirect) {
+    const { url, type } = payload.redirect;
+    await navigate(url, { mode: type === "replace" ? "replace" : "push", scroll: true });
+    return undefined;
+  }
+  if (payload.revalidated) await router.refresh();
+  if (!payload.returnValue.ok) throw payload.returnValue.data;
+  return payload.returnValue.data;
+});
 
 function AppRouter({ initialPayload }) {
   const [state, setState] = useState(() => ({ payload: initialPayload, url: currentUrl(), commit: null }));
@@ -131,7 +158,7 @@ function AppRouter({ initialPayload }) {
 
 async function main() {
   const initialPayload = await createFromReadableStream(readInlineFlight());
-  hydrateRoot(document, h(AppRouter, { initialPayload }));
+  hydrateRoot(document, h(AppRouter, { initialPayload }), { formState: initialPayload.formState || null });
 }
 
 main();
