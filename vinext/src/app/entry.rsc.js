@@ -14,13 +14,14 @@ import {
 } from "@vitejs/plugin-rsc/rsc";
 import { routes, rootLevel, fileIcons, metadataRoutes } from "virtual:vinext/app-routes";
 import { matchRoute } from "../routing/pages-routes.js";
-import { ErrorBoundary, NotFoundBoundary } from "./boundaries.js";
+import { ErrorBoundary, NotFoundBoundary, LayoutSegments } from "./boundaries.js";
 import { httpFallbackStatus, parseRedirectError } from "../shims/navigation-shared.js";
 import { createAppRequestStore, takeSetCookies } from "../shims/headers.js";
 import { NextRequest } from "../shims/server.js";
 import { runWithRequestStore } from "../server/ssr-context.js";
 import { resolveMetadata, resolveViewport, metadataTags } from "./metadata.js";
 import { metadataRouteResponse } from "./metadata-routes.js";
+import { segmentConfig, pageCacheControl, inStaticParams } from "./segment-config.js";
 
 const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 const FALLBACK_FILES = { 404: "notFound", 403: "forbidden", 401: "unauthorized" };
@@ -69,26 +70,64 @@ async function load(lazy) {
   return lazy ? await lazy() : null;
 }
 
+const LEVEL_KEYS = ["layout", "template", "notFound", "error", "loading", "globalError", "forbidden", "unauthorized", "default"];
+
 /** Each level's convention modules, loaded in parallel. */
 function loadLevels(levels) {
   return Promise.all(
     levels.map(async (level) => {
-      const [layout, template, notFound, error, loading, globalError, forbidden, unauthorized] = await Promise.all(
-        ["layout", "template", "notFound", "error", "loading", "globalError", "forbidden", "unauthorized"].map((k) =>
-          load(level[k]),
-        ),
-      );
-      return { paramNames: level.paramNames, layout, template, notFound, error, loading, globalError, forbidden, unauthorized };
+      const loaded = await Promise.all(LEVEL_KEYS.map((k) => load(level[k])));
+      const mods = { paramNames: level.paramNames, segment: level.segment };
+      LEVEL_KEYS.forEach((k, i) => (mods[k] = loaded[i]));
+      return mods;
     }),
   );
+}
+
+/** What each level's @slots render, loaded: { [levelIndex]: [{ name, Component, mods }] }. */
+async function loadSlots(slots) {
+  const out = {};
+  await Promise.all(
+    Object.entries(slots || {}).map(async ([i, list]) => {
+      out[i] = await Promise.all(
+        list.map(async (s) => ({ name: s.name, Component: (await s.module()).default, mods: await loadLevels(s.levels) })),
+      );
+    }),
+  );
+  return out;
+}
+
+/** The value useSelectedLayoutSegments reports for a level's folder. */
+function segmentValue(segment, params) {
+  const m = /^\[{1,2}(?:\.\.\.)?([^\]]+)\]{1,2}$/.exec(segment || "");
+  if (!m) return segment || null;
+  const v = params[m[1]];
+  return v === undefined ? null : Array.isArray(v) ? v.join("/") : String(v);
+}
+
+/** The slot elements a level's layout receives as props. */
+function slotProps(slotList, params, props) {
+  const out = {};
+  for (const slot of slotList || []) {
+    let node = slot.Component ? h(slot.Component, props) : null;
+    for (let i = slot.mods.length - 1; i >= 0; i--) {
+      const m = slot.mods[i];
+      if (m.template && m.template.default) node = h(m.template.default, null, node);
+      if (m.layout && m.layout.default) node = h(m.layout.default, { params: thenable(params) }, node);
+    }
+    out[slot.name] = node;
+  }
+  return out;
 }
 
 /**
  * Wrap node in levels[0..upTo]'s layouts, templates and boundaries,
  * innermost first. withBoundaries=false leaves out the boundaries of
- * level upTo itself (a fallback already rendered there).
+ * level upTo itself (a fallback already rendered there). slots are the
+ * loaded @slots per level (their elements become layout props).
  */
-function wrapLevels(node, mods, upTo, params, pathname, { boundariesAtLeaf = true } = {}) {
+function wrapLevels(node, mods, upTo, params, pathname, { boundariesAtLeaf = true, slots = {}, pageProps } = {}) {
+  const segments = mods.map((m) => segmentValue(m.segment, params));
   for (let i = upTo; i >= 0; i--) {
     const m = mods[i];
     const boundaries = i < upTo || boundariesAtLeaf;
@@ -105,8 +144,10 @@ function wrapLevels(node, mods, upTo, params, pathname, { boundariesAtLeaf = tru
       node = h(m.template.default, { key: pathname }, node);
     }
     if (m.layout && m.layout.default) {
-      node = h(m.layout.default, { params: thenable(pickParams(params, m.paramNames)) }, node);
+      const own = { params: thenable(pickParams(params, m.paramNames)) };
+      node = h(m.layout.default, { ...own, ...slotProps(slots[i], params, pageProps || own) }, node);
     }
+    node = h(LayoutSegments, { segments: segments.slice(i + 1).filter((s) => s !== null) }, node);
   }
   if (!mods[0] || !mods[0].layout) node = h("html", null, h("body", null, node));
   if (mods[0] && mods[0].globalError && mods[0].globalError.default) {
@@ -164,13 +205,24 @@ function renderRsc(payload, isRsc, onNavigationError, temporaryReferences) {
   });
 }
 
-async function respond(request, rscStream, status, nav) {
+async function respond(request, rscStream, status, nav, cacheControl = null) {
+  const headers = { vary: "RSC" };
+  if (cacheControl) headers["cache-control"] = cacheControl;
   if (request.headers.get("rsc") === "1") {
-    return new Response(rscStream, { status, headers: { "content-type": RSC_CONTENT_TYPE, vary: "RSC" } });
+    return new Response(rscStream, { status, headers: { ...headers, "content-type": RSC_CONTENT_TYPE } });
   }
   const ssr = await import.meta.viteRsc.loadModule("ssr", "index");
   const html = await ssr.renderHtml(rscStream, nav);
-  return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", vary: "RSC" } });
+  return new Response(html, { status, headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+}
+
+/** Whether dynamicParams=false rules params out (they are not in generateStaticParams). */
+async function outsideStaticParams(segmentMods, params) {
+  for (const mod of segmentMods) {
+    if (!mod || typeof mod.generateStaticParams !== "function") continue;
+    if (!inStaticParams(await mod.generateStaticParams({ params }), params)) return true;
+  }
+  return false;
 }
 
 /** A promise that resolves once stream has been read to its end (or failed). */
@@ -193,7 +245,13 @@ async function renderPage(request, url, match, { formState } = {}) {
   const searchParams = searchToObject(url.searchParams);
   const isRsc = request.headers.get("rsc") === "1";
   const renderFallback = (status, from, meta) =>
-    respond(request, renderRsc({ tree: fallbackTree(status, mods, from, params, pathname, meta), params, formState }, isRsc), status, nav);
+    respond(
+      request,
+      renderRsc({ tree: fallbackTree(status, mods, from, params, pathname, meta), params, formState }, isRsc),
+      status,
+      nav,
+      pageCacheControl({}, { status }),
+    );
 
   if (!route) {
     return renderFallback(404, 0, await headElements(mods, params, searchParams));
@@ -201,6 +259,13 @@ async function renderPage(request, url, match, { formState } = {}) {
 
   const pageMod = await route.module();
   const Page = pageMod.default;
+  const segmentMods = [...mods.map((m) => m.layout), pageMod];
+  const config = segmentConfig(segmentMods);
+  const store = globalThis.__VINEXT_SSR_ALS__.getStore().appRequest;
+  const cacheControl = () => pageCacheControl(config, { status: 200, dynamicUsed: store.dynamicUsed });
+  if (!config.dynamicParams && (await outsideStaticParams(segmentMods, params))) {
+    return renderFallback(404, mods.length - 1, await headElements(mods, params, searchParams));
+  }
   const props = { params: thenable(params), searchParams: thenable(searchParams) };
   const leafIndex = mods.length - 1;
   let meta = [];
@@ -249,9 +314,10 @@ async function renderPage(request, url, match, { formState } = {}) {
   } else if (Page) {
     leaf = h(Page, props);
   }
-  const tree = wrapLevels(h(Fragment, null, ...meta, leaf), mods, leafIndex, params, pathname);
+  const slots = await loadSlots(route.slots);
+  const tree = wrapLevels(h(Fragment, null, ...meta, leaf), mods, leafIndex, params, pathname, { slots, pageProps: props });
   const stream = renderRsc({ tree, params, formState }, isRsc, (err) => settle(err));
-  if (!waitForPage) return respond(request, stream, 200, nav);
+  if (!waitForPage) return respond(request, stream, 200, nav, cacheControl());
 
   const [out, watch] = stream.tee();
   const navError = await Promise.race([pageSettled, drained(watch).then(() => null)]);
@@ -261,7 +327,7 @@ async function renderPage(request, url, match, { formState } = {}) {
     if (redirect) return redirectResponse(redirect);
     return renderFallback(httpFallbackStatus(navError), leafIndex, meta);
   }
-  return respond(request, out, 200, nav);
+  return respond(request, out, 200, nav, cacheControl());
 }
 
 /**

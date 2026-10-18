@@ -81,3 +81,44 @@ test("a route carries its layout chain and the not-found files along it", () => 
   assert.deepEqual(slugLevel.paramNames, ["slug"]);
   assert.deepEqual(blog.levels[0].paramNames, []);
 });
+
+test("parallel @slots: each route gets the slot page for its URL, else the slot's default", () => {
+  const dir = makeApp([
+    "layout.tsx",
+    "dash/layout.tsx",
+    "dash/page.tsx",
+    "dash/default.tsx",
+    "dash/settings/page.tsx",
+    "dash/@team/page.tsx",
+    "dash/@team/default.tsx",
+    "dash/@team/layout.tsx",
+    "dash/@team/members/page.tsx",
+    "dash/@stats/page.tsx",
+  ]);
+  const { routes } = scanAppDir(dir);
+  const at = (p) => matchAppRoute(routes, p).route;
+  const slotsOf = (r) =>
+    Object.fromEntries(
+      Object.entries(r.slots).map(([i, list]) => [i, list.map((s) => `${s.name}:${path.relative(dir, s.file)}`)]),
+    );
+
+  assert.deepEqual(slotsOf(at("/dash")), {
+    1: [`stats:${path.join("dash", "@stats", "page.tsx")}`, `team:${path.join("dash", "@team", "page.tsx")}`],
+  });
+  // No @stats default and no settings page in either slot: team falls back to default, stats to nothing.
+  assert.deepEqual(slotsOf(at("/dash/settings")), { 1: [`team:${path.join("dash", "@team", "default.tsx")}`] });
+  // A URL only a slot has is a route whose children render the level's default.tsx.
+  const members = at("/dash/members");
+  assert.equal(path.relative(dir, members.file), path.join("dash", "default.tsx"));
+  assert.deepEqual(slotsOf(members), { 1: [`team:${path.join("dash", "@team", "members", "page.tsx")}`] });
+  // The slot's own layout wraps what it renders.
+  const team = members.slots[1][0];
+  assert.deepEqual(team.levels.filter((l) => l.layout).map((l) => path.relative(dir, l.layout)), [path.join("dash", "@team", "layout.tsx")]);
+  // Slot folders are not routes of their own.
+  assert.equal(matchAppRoute(routes, "/dash/team"), null);
+});
+
+test("each level knows its folder name, for useSelectedLayoutSegments", () => {
+  const r = match("/features").route;
+  assert.deepEqual(r.levels.map((l) => l.segment), ["", "(marketing)", "features"]);
+});

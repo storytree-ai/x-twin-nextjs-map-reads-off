@@ -5,7 +5,7 @@
 import { useContext, useMemo } from "react";
 import { useRouterState } from "./router-state.js";
 import Router from "./router.js";
-import { AppNavContext } from "./app-nav-context.js";
+import { AppNavContext, LayoutSegmentsContext } from "./app-nav-context.js";
 import { ReadonlyURLSearchParams } from "./navigation-shared.js";
 
 export * from "./navigation-shared.js";
@@ -47,10 +47,11 @@ export function useRouter() {
   return app ? app.router : pagesRouter;
 }
 
-export function useSelectedLayoutSegment() {
-  return null;
+export function useSelectedLayoutSegments() {
+  return useContext(LayoutSegmentsContext) || [];
 }
 
-export function useSelectedLayoutSegments() {
-  return [];
+export function useSelectedLayoutSegment() {
+  const segments = useSelectedLayoutSegments();
+  return segments.length ? segments[0] : null;
 }

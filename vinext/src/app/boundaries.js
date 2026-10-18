@@ -2,8 +2,9 @@
 // Client boundaries the App Router's server tree places around segments:
 // error.tsx / global-error.tsx (ErrorBoundary) and not-found.tsx
 // (NotFoundBoundary). A boundary resets when the URL changes.
+// LayoutSegments tells useSelectedLayoutSegments which segments sit below a level.
 import { Component, createElement, useContext } from "react";
-import { AppNavContext } from "../shims/app-nav-context.js";
+import { AppNavContext, LayoutSegmentsContext } from "../shims/app-nav-context.js";
 import { httpFallbackStatus, parseRedirectError } from "../shims/navigation-shared.js";
 
 function usePathnameKey() {
@@ -60,4 +61,8 @@ class NotFoundBoundaryInner extends Component {
 export function NotFoundBoundary({ fallback, children }) {
   const pathname = usePathnameKey();
   return createElement(NotFoundBoundaryInner, { fallback, pathname }, children);
+}
+
+export function LayoutSegments({ segments, children }) {
+  return createElement(LayoutSegmentsContext.Provider, { value: segments }, children);
 }
