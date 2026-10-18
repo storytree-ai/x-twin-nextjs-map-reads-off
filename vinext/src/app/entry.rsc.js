@@ -292,21 +292,25 @@ async function renderPage(request, url, match, { formState } = {}) {
   const props = { params: thenable(params), searchParams: thenable(searchParams) };
   const leafIndex = mods.length - 1;
   let meta = [];
+  let metadataError = null;
   try {
     meta = await headElements(mods, params, searchParams, pageMod);
   } catch (err) {
     const redirect = parseRedirectError(err);
     if (redirect) return redirectResponse(redirect);
     const status = httpFallbackStatus(err);
-    if (!status) throw err;
-    return renderFallback(status, leafIndex, meta);
+    if (status) return renderFallback(status, leafIndex, meta);
+    // generateMetadata failed: the page's segment fails with its error, for
+    // the error boundaries around it to catch.
+    metadataError = err;
   }
 
   // The response status waits for the page itself (it runs once, inside
   // the render): a notFound() or redirect() thrown by it or its layouts
   // answers 404 / 307 instead of a streamed boundary. Under a loading.tsx
   // the page streams, as in Next.js.
-  const waitForPage = typeof Page === "function" && !isClientReference(Page) && !mods.some((m) => m.loading);
+  const waitForPage =
+    !metadataError && typeof Page === "function" && !isClientReference(Page) && !mods.some((m) => m.loading);
   let settle = () => {};
   const pageSettled = new Promise((resolve) => (settle = resolve));
   let leaf = null;
@@ -333,6 +337,10 @@ async function renderPage(request, url, match, { formState } = {}) {
       }
       finish(null);
       return out;
+    });
+  } else if (metadataError) {
+    leaf = h(function MetadataError() {
+      throw metadataError;
     });
   } else if (Page) {
     leaf = h(Page, props);
