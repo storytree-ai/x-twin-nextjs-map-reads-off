@@ -104,12 +104,23 @@ const ELEMENTS = new Set([Symbol.for("react.transitional.element"), Symbol.for("
 // cannot pass (other functions, local symbols, class instances) is refused
 // with React's words. Values JSON cannot tell apart get tagged objects, and a
 // plain object with $-keys is tagged too, so no value keys as another.
-// settled holds the promises met so far by what they came to; the ones not
-// yet settled are pushed onto pending (and key as null for now).
-function boundReplacer(settled, pending) {
+// An object met again (round a cycle, or shared) keys as which one it was, in
+// the order met, as React writes a reference to it. settled holds the promises met so
+// far by what they came to; the ones not yet settled are pushed onto pending
+// (and key as null for now). While state.arguments is set, a function or
+// class instance sets state.passedThrough: Next.js passes them through as
+// temporary references, unkeyed, which vinext does not swap back into a
+// cached result (and keying them by identity would grow the cache with every
+// request that makes a new one), so the call is not cached.
+function boundReplacer(settled, pending, state = {}) {
   const keying = new Set(); // the cached functions whose closed-over values are being keyed
+  const met = new Map(); // the objects met so far, numbered in the order met
   return function boundValue(key, value) {
     const raw = this[key];
+    if (raw && typeof raw === "object" && !(raw instanceof Date)) { // React writes a Date by value
+      if (met.has(raw)) return { $ref: met.get(raw) };
+      met.set(raw, met.size);
+    }
     if (raw instanceof Date) return { $date: value };
     if (value === undefined) return { $undefined: true };
     if (typeof value === "number" && (!Number.isFinite(value) || Object.is(value, -0))) return { $number: Object.is(value, -0) ? "-0" : String(value) };
@@ -137,6 +148,10 @@ function boundReplacer(settled, pending) {
           keying.delete(value);
         }
       }
+      if (state.arguments) {
+        state.passedThrough = true;
+        return null;
+      }
       throw new Unserializable(
         'Functions cannot be passed directly to Server Functions unless you explicitly expose it by marking it with "use server".',
       );
@@ -156,6 +171,10 @@ function boundReplacer(settled, pending) {
     }
     if (value instanceof Error) return { $error: value.name, message: value.message };
     if (Object.getPrototypeOf(value) !== Object.prototype) {
+      if (state.arguments) {
+        state.passedThrough = true;
+        return null;
+      }
       throw new Unserializable(
         "Only plain objects, and a few built-ins, can be passed to Server Functions. Classes or null prototypes are not supported.",
       );
@@ -185,7 +204,9 @@ function elementType(type) {
  */
 function cacheKey(id, args, closure, settled = new Map()) {
   const pending = [];
-  const replacer = boundReplacer(settled, pending);
+  // One encoding, the closed-over values first, as Next.js binds them ahead of the arguments.
+  const state = { arguments: false, passedThrough: false };
+  const replacer = boundReplacer(settled, pending, state);
   let bound = "";
   for (const [name, value] of Object.entries(closure || {})) {
     try {
@@ -195,19 +216,20 @@ function cacheKey(id, args, closure, settled = new Map()) {
       return null;
     }
   }
-  if (pending.length) {
-    const settle = (p) =>
-      p.then(
-        (v) => settled.set(p, { value: v }),
-        (err) => settled.set(p, { rejected: String(err && err.message) }),
-      );
-    return Promise.all(pending.map(settle)).then(() => cacheKey(id, args, closure, settled));
-  }
+  state.arguments = true;
+  let keyedArgs;
   try {
-    return `${id}:${JSON.stringify(args)}${bound}`;
-  } catch {
+    keyedArgs = JSON.stringify(args, replacer);
+  } catch (err) {
+    if (err instanceof Unserializable) throw new Error(`A "use cache" function (${id}) was passed an argument: ${err.message}`);
     return null; // arguments that cannot be keyed are not cached
   }
+  if (pending.length) {
+    // A rejected one rejects the call, as React's encodeReply rejects.
+    const settle = (p) => p.then((v) => settled.set(p, { value: v }));
+    return Promise.all(pending.map(settle)).then(() => cacheKey(id, args, closure, settled));
+  }
+  return state.passedThrough ? null : `${id}:${keyedArgs}${bound}`;
 }
 
 function fill(key, fn) {
