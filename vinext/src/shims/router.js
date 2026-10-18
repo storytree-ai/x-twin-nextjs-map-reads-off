@@ -13,6 +13,7 @@ import {
   setSSRContext,
   useRouterState,
 } from "./router-state.js";
+import { createPatternMatcher } from "../client/route-matcher.js";
 
 export { setSSRContext };
 
@@ -264,9 +265,11 @@ function onPopState(e) {
 function onVinextNavigate() {
   const data = window.__NEXT_DATA__ || {};
   const pattern = data.page || getRouterState().pathname;
+  // Route params from the URL when it fits the page's pattern, else from __NEXT_DATA__.
+  const fromUrl = createPatternMatcher([pattern])(window.location.pathname);
   setClientRouterState({
     pathname: pattern,
-    query: buildQuery(pattern, window.location.search, data.query),
+    query: buildQuery(pattern, window.location.search, fromUrl ? fromUrl.params : data.query),
     asPath: toAsPath(window.location),
   });
 }

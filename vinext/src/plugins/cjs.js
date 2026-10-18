@@ -11,8 +11,8 @@ export function __vinext_cjs_interop(ns) {
   return ns && ns.__vinext_cjs ? ns.default : ns;
 }
 
-/** [start, end) ranges of comments, skipping strings and templates. */
-function commentRanges(code) {
+/** [start, end) ranges of comments, strings and templates: text, not code. */
+function textRanges(code) {
   const ranges = [];
   let i = 0;
   while (i < code.length) {
@@ -29,9 +29,10 @@ function commentRanges(code) {
       ranges.push([i, stop]);
       i = stop;
     } else if (c === '"' || c === "'" || c === "`") {
-      i++;
+      const start = i++;
       while (i < code.length && code[i] !== c) i += code[i] === "\\" ? 2 : 1;
       i++;
+      ranges.push([start, i]);
     } else {
       i++;
     }
@@ -43,7 +44,7 @@ const inRanges = (ranges, pos) => ranges.some(([s, e]) => pos >= s && pos < e);
 
 /** The transformed code, or null when the module has no CommonJS in it. */
 export function transformCjs(code) {
-  const comments = commentRanges(code);
+  const comments = textRanges(code);
   const requireRe = /(?<![.\w$])require\(\s*(['"])([^'"\n]+)\1\s*\)/g;
   const imports = [];
   const specs = new Map();

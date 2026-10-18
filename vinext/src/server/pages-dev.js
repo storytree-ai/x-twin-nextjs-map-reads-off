@@ -408,7 +408,8 @@ async function renderPage(server, ctx, scan, route, params, pageMod, opts) {
       (await App.getInitialProps({
         Component: pageMod.default,
         router: routerShim.default,
-        ctx: { req, res, pathname: route.pattern, query, asPath },
+        // Cached (getStaticProps) renders get no request, as in Next.js.
+        ctx: { req: isGsp ? undefined : req, res: isGsp ? undefined : res, pathname: route.pattern, query, asPath },
       })) || {};
     pageProps = { ...(appProps.pageProps || {}), ...pageProps };
   }

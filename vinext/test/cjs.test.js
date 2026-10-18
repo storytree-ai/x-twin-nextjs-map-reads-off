@@ -31,3 +31,8 @@ test("a 'use client' directive stays first", () => {
   const out = transformCjs(`"use client";\nconst x = require("./x");\nexport default x;`);
   assert.match(out, /^"use client";\nimport \* as __vinext_req_0/);
 });
+
+test("require( inside a string or template is text, not an import", () => {
+  assert.equal(transformCjs('const help = "use require(\\"lodash\\")";\nexport default help;'), null);
+  assert.equal(transformCjs("const t = `require('x')`;\nexport default t;"), null);
+});
