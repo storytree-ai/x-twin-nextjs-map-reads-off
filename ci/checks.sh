@@ -175,8 +175,9 @@ grep -q 'data-testid="team-slot"' "$WORK/body.html" || fail "parallel @team slot
 fetch /dashboard/settings >/dev/null
 grep -q 'data-testid="team-default"' "$WORK/body.html" || fail "parallel slot default.tsx did not render"
 
-curl -s -H "RSC: 1" -H "x-vinext-from: /feed" -o "$WORK/body.html" "http://localhost:$PORT/photos/1"
+curl -s -H "RSC: 1" -H "x-vinext-from: /feed" -D "$WORK/headers.txt" -o "$WORK/body.html" "http://localhost:$PORT/photos/1"
 grep -q "photo-modal" "$WORK/body.html" && grep -q "feed-page" "$WORK/body.html" || fail "navigating from /feed did not intercept /photos/1"
+header vary | grep -qi "x-vinext-from" || fail "an intercepted RSC payload does not vary on x-vinext-from"
 curl -s -H "RSC: 1" -o "$WORK/body.html" "http://localhost:$PORT/photos/1"
 grep -q "photo-page" "$WORK/body.html" || fail "/photos/1 without interception did not render the full page"
 

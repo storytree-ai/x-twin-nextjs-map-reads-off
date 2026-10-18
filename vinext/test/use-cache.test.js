@@ -72,3 +72,46 @@ test("cacheTag and cacheLife still apply after an await", async () => {
   revalidateTag("late-tag");
   assert.equal(await run(), 2);
 });
+
+test("an inline cached function keys on the outer values it reads", () => {
+  // function Page({ userId }) { const label = "x"; const get = async () => { "use cache"; return userId + obj.label; }; }
+  const code =
+    'function Page({ userId }) { const label = "x"; const get = async () => { "use cache"; return userId + obj.label; }; }';
+  const at = (s, from = 0) => code.indexOf(s, from);
+  const id = (name, start) => ({ type: "Identifier", name, start, end: start + name.length });
+  const arrowStart = at("async ()");
+  const arrowBody = { type: "BlockStatement", start: at("{", arrowStart), end: at("; }", arrowStart) + 1 };
+  const d = at('"use cache";');
+  arrowBody.body = [
+    { type: "ExpressionStatement", directive: "use cache", start: d, end: d + 12 },
+    {
+      type: "ReturnStatement",
+      argument: {
+        type: "BinaryExpression",
+        left: id("userId", at("userId +")),
+        right: { type: "MemberExpression", computed: false, object: id("obj", at("obj")), property: id("label", at("label;")) },
+      },
+    },
+  ];
+  const arrow = { type: "ArrowFunctionExpression", async: true, params: [], start: arrowStart, end: arrowBody.end, body: arrowBody };
+  const outerBody = {
+    type: "BlockStatement",
+    start: at("{ const"),
+    end: code.length,
+    body: [
+      { type: "VariableDeclaration", declarations: [{ type: "VariableDeclarator", id: id("label", at("label =")), init: { type: "Literal" } }] },
+      { type: "VariableDeclaration", declarations: [{ type: "VariableDeclarator", id: id("get", at("get")), init: arrow }] },
+    ],
+  };
+  const page = {
+    type: "FunctionDeclaration",
+    id: id("Page", 9),
+    start: 0,
+    end: code.length,
+    params: [{ type: "ObjectPattern", properties: [{ type: "Property", shorthand: true, key: id("userId", at("userId")), value: id("userId", at("userId")) }] }],
+    body: outerBody,
+  };
+  const out = transformUseCache(code, { type: "Program", body: [page] }, "p.js");
+  // userId is Page's; obj is not bound in Page; .label is a property, not the outer label.
+  assert.match(out, new RegExp(`__vinext_useCache\\("p\\.js:${arrowStart}", \\[\\[\\], \\[userId\\]\\], async`));
+});
