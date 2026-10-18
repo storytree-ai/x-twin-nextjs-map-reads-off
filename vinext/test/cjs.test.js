@@ -44,3 +44,9 @@ test("require( in JSX text is text, not an import", () => {
   assert.match(transformCjs('function f() {\n  return require("b");\n}\nexport default f;'), /__vinext_req_0 from "b"/);
   assert.match(transformCjs('export default () => <p>{require("c").label}</p>;'), /__vinext_req_0 from "c"/);
 });
+
+test("an apostrophe in JSX text does not hide the requires after it", () => {
+  const out = transformCjs(`const C = () => <p>Don't panic</p>;\nconst lib = require("./lib");\nmodule.exports = { C, lib };\n`);
+  assert.match(out, /__vinext_req_0 from "\.\/lib"/);
+  assert.match(out, /export default module\.exports;/);
+});

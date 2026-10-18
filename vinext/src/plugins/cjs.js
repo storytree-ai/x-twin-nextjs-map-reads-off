@@ -29,8 +29,10 @@ function textRanges(code) {
       ranges.push([i, stop]);
       i = stop;
     } else if (c === '"' || c === "'" || c === "`") {
+      // Quoted strings end at a newline: an apostrophe in JSX text
+      // ("Don't") must not swallow the rest of the module.
       const start = i++;
-      while (i < code.length && code[i] !== c) i += code[i] === "\\" ? 2 : 1;
+      while (i < code.length && code[i] !== c && (c === "`" || code[i] !== "\n")) i += code[i] === "\\" ? 2 : 1;
       i++;
       ranges.push([start, i]);
     } else {

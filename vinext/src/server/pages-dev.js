@@ -110,6 +110,8 @@ function replaceRequestHeaders(req, headers) {
 export function createPagesDevHandler(server, ctx) {
   let rules = null;
   const isr = createIsrCache();
+  // An edited page (or anything it imports) must not keep serving its old ISR HTML.
+  server.watcher.on("change", () => isr.clear());
 
   return async function vinextPages(req, res, next) {
     let url;
