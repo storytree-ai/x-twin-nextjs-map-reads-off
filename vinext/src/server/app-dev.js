@@ -81,6 +81,8 @@ export async function sendWebResponse(res, response, status) {
 }
 
 export function createAppDevHandler(server, ctx, entryFile) {
+  // The RSC entry (another module graph) reports the errors it handles itself.
+  globalThis.__VINEXT_REPORT_REQUEST_ERROR__ = (err, req, context) => reportRequestError(ctx, err, req, context);
   return async function vinextApp(req, res, next) {
     let pathname;
     try {

@@ -29,13 +29,19 @@ export async function renderHtml(rscStream, nav) {
     return h(AppNavContext.Provider, { value }, use(payload).tree);
   }
   const bootstrapScriptContent = await import.meta.viteRsc.loadBootstrapScriptContent("index");
-  const html = await renderToReadableStream(h(Root), {
-    bootstrapScriptContent,
-    formState: nav.formState || null,
-    onError(err) {
-      if (err && typeof err === "object" && typeof err.digest === "string") return err.digest;
-      console.error(err);
-    },
-  });
+  const onError = (err) => {
+    if (err && typeof err === "object" && typeof err.digest === "string") return err.digest;
+    console.error(err);
+  };
+  let html;
+  try {
+    html = await renderToReadableStream(h(Root), { bootstrapScriptContent, formState: nav.formState || null, onError });
+  } catch {
+    // The shell failed (Fizz runs no error boundaries): answer an empty
+    // document the browser renders from the inline payload, where error.tsx
+    // and global-error.tsx catch the error.
+    const csr = h("html", null, h("head"), h("body", null, h("script", { dangerouslySetInnerHTML: { __html: "self.__vinext_csr=1" } })));
+    html = await renderToReadableStream(csr, { bootstrapScriptContent, onError });
+  }
   return html.pipeThrough(injectFlight(forInline));
 }

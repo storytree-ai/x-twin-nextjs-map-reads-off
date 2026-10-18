@@ -158,7 +158,12 @@ function AppRouter({ initialPayload }) {
 
 async function main() {
   const initialPayload = await createFromReadableStream(readInlineFlight());
-  hydrateRoot(document, h(AppRouter, { initialPayload }), { formState: initialPayload.formState || null });
+  hydrateRoot(document, h(AppRouter, { initialPayload }), {
+    formState: initialPayload.formState || null,
+    // An empty document the server could not render (see entry.ssr.js) is
+    // expected not to match: React renders it on the client instead.
+    onRecoverableError: self.__vinext_csr ? () => {} : undefined,
+  });
 }
 
 main();

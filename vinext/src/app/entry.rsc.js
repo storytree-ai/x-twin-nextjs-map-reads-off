@@ -190,6 +190,27 @@ const isSuspenseException = (err) =>
 
 const isNavigationError = (err) => !!(parseRedirectError(err) || httpFallbackStatus(err));
 
+/**
+ * Tell instrumentation's onRequestError about an error while handling the
+ * current request (once per error). routeType is "render" or "route".
+ */
+function reportError(err, routeType) {
+  const store = globalThis.__VINEXT_SSR_ALS__.getStore();
+  const report = globalThis.__VINEXT_REPORT_REQUEST_ERROR__;
+  if (!store || !store.request || typeof report !== "function") return;
+  if (err && typeof err === "object") {
+    if ((store.reported ||= new WeakSet()).has(err)) return;
+    store.reported.add(err);
+  }
+  const { request, routePath } = store;
+  const url = new URL(request.url);
+  report(err, { url: url.pathname + url.search, method: request.method, headers: Object.fromEntries(request.headers) }, {
+    routerKind: "App Router",
+    routePath: routePath || url.pathname,
+    routeType,
+  });
+}
+
 /** The RSC stream for a payload; onNavigationError hears notFound()/redirect() thrown while rendering. */
 function renderRsc(payload, isRsc, onNavigationError, temporaryReferences) {
   return renderToReadableStream(payload, {
@@ -199,6 +220,8 @@ function renderRsc(payload, isRsc, onNavigationError, temporaryReferences) {
         if (onNavigationError) onNavigationError(err);
         return err.digest;
       }
+      if (isSuspenseException(err)) return;
+      reportError(err, "render");
       if (err && typeof err === "object" && typeof err.digest === "string") return err.digest;
       if (!isRsc) console.error(err);
     },
@@ -427,6 +450,7 @@ async function handleRoute(request, match, store) {
     const status = httpFallbackStatus(err);
     if (status) return new Response(null, { status });
     console.error(err);
+    reportError(err, "route");
     return new Response(null, { status: 500 });
   }
   if (!(response instanceof Response)) {
@@ -460,10 +484,12 @@ export default function handler(request) {
   return runWithRequestStore(async () => {
     const store = globalThis.__VINEXT_SSR_ALS__.getStore();
     store.appRequest = createAppRequestStore(request.headers);
+    store.request = request;
     const url = new URL(request.url);
     const metadataRoute = metadataRoutes.find((r) => r.path === url.pathname);
     if (metadataRoute) return metadataRouteResponse(metadataRoute.type, await metadataRoute.module());
     const match = matchRoute(routes, url.pathname);
+    if (match) store.routePath = match.route.pattern;
     let response;
     if (match && match.route.kind === "route") {
       store.appRequest.phase = "route";
