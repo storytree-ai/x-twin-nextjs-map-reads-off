@@ -188,6 +188,10 @@ fetch /use-cache-fn-test >/dev/null
 first="$(grep -oE 'data-testid="data-value">[0-9]+' "$WORK/body.html")"
 fetch /use-cache-fn-test >/dev/null
 [ -n "$first" ] && [ "$first" = "$(grep -oE 'data-testid="data-value">[0-9]+' "$WORK/body.html")" ] || fail "\"use cache\" function was not cached"
+[ "$(fetch /use-cache-test)" = "200" ] || fail "a file-level \"use cache\" page did not answer 200"
+first="$(grep -oE 'data-testid="timestamp">[0-9]+' "$WORK/body.html")"
+fetch /use-cache-test >/dev/null
+[ -n "$first" ] && [ "$first" = "$(grep -oE 'data-testid="timestamp">[0-9]+' "$WORK/body.html")" ] || fail "a file-level \"use cache\" page was not cached"
 
 # next/og: ImageResponse route handlers and app/icon.tsx.
 png_size() { od -An -tu1 -j16 -N8 "$WORK/body.html" | awk '{ printf "%dx%d", ($1*16777216)+($2*65536)+($3*256)+$4, ($5*16777216)+($6*65536)+($7*256)+$8 }'; }

@@ -115,3 +115,21 @@ test("an inline cached function keys on the outer values it reads", () => {
   // userId is Page's; obj is not bound in Page; .label is a property, not the outer label.
   assert.match(out, new RegExp(`__vinext_useCache\\("p\\.js:${arrowStart}", \\[\\[\\], \\[userId\\]\\], async`));
 });
+
+test("a file-level 'use cache' wraps every exported async function", () => {
+  const code = '"use cache"; export async function get(a) { return a; }';
+  const fnStart = code.indexOf("async");
+  const body = { type: "BlockStatement", start: code.indexOf("{"), end: code.length, body: [] };
+  const fn = { type: "FunctionDeclaration", async: true, start: fnStart, end: code.length, body, params: [] };
+  const ast = {
+    type: "Program",
+    body: [
+      { type: "ExpressionStatement", directive: "use cache", start: 0, end: 12 },
+      { type: "ExportNamedDeclaration", declaration: fn },
+    ],
+  };
+  assert.match(
+    transformUseCache(code, ast, "f.js"),
+    new RegExp(`export async function get\\(a\\) \\{return __vinext_useCache\\("f\\.js:${fnStart}", Array\\.from\\(arguments\\), async \\(\\) => \\{ return a; \\}\\); \\}$`),
+  );
+});

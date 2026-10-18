@@ -28,6 +28,16 @@ function* functions(node, outer = []) {
   for (const c of children(node)) yield* functions(c, next);
 }
 
+/** The exported (async) functions of a module. */
+function exportedFunctions(program) {
+  const out = [];
+  for (const stmt of program.body) {
+    const decl = stmt.type === "ExportNamedDeclaration" || stmt.type === "ExportDefaultDeclaration" ? stmt.declaration : null;
+    if (decl && FUNCTION_TYPES.has(decl.type) && decl.async) out.push(decl);
+  }
+  return out;
+}
+
 /** The names a parameter pattern binds. */
 function boundNames(pattern, out = []) {
   if (!pattern) return out;
