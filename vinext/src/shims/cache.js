@@ -96,6 +96,7 @@ export function __vinext_cacheRef(id, fn, closure) {
 class Unserializable extends Error {}
 const SERVER_REFERENCE = Symbol.for("react.server.reference");
 const CLIENT_REFERENCE = Symbol.for("react.client.reference");
+const keying = new Set(); // the cached functions whose closed-over values are being keyed
 const ELEMENTS = new Set([Symbol.for("react.transitional.element"), Symbol.for("react.element")]);
 
 // A JSON.stringify replacer for the values a cached function closes over,
@@ -117,7 +118,16 @@ function boundValue(key, value) {
     if (value.$$typeof === SERVER_REFERENCE) return { $action: value.$$id, bound: value.$$bound ?? null };
     if (value.$$typeof === CLIENT_REFERENCE) return { $client: value.$$id };
     const ref = cacheRefs.get(value);
-    if (ref) return { $cache: ref.id, bound: ref.closure ? ref.closure() : null };
+    if (ref) {
+      // Its own closed-over values, once round a loop of functions reading each other.
+      if (!ref.closure || keying.has(value)) return { $cache: ref.id };
+      keying.add(value);
+      try {
+        return { $cache: ref.id, bound: JSON.stringify(ref.closure(), boundValue) };
+      } finally {
+        keying.delete(value);
+      }
+    }
     throw new Unserializable(
       'Functions cannot be passed directly to Server Functions unless you explicitly expose it by marking it with "use server".',
     );

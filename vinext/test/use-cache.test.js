@@ -210,3 +210,24 @@ test("a closed-over cached function or server action keys by its id and its own 
   assert.equal(await run(action), 3);
   assert.equal(await run(action), 3);
 });
+
+test("a cached function that closes over itself keys once round the loop", async () => {
+  let calls = 0;
+  const self = __vinext_cacheRef("t:self", async () => 1, () => ({ self }));
+  const run = () => __vinext_useCache("t:5", [], async () => ++calls, { self });
+  assert.equal(await run(), 1);
+  assert.equal(await run(), 1);
+});
+
+test("a cached function declaration is marked where its block starts, as it is hoisted", () => {
+  const code = 'function Page(u) { return 1; async function get() { "use cache"; return u; } }';
+  const start = code.indexOf("async function");
+  const body = { type: "BlockStatement", start: code.indexOf("{", start), end: code.length - 2 };
+  const d = code.indexOf('"use cache";');
+  body.body = [{ type: "ExpressionStatement", directive: "use cache", start: d, end: d + 12 }, { type: "ReturnStatement", argument: I("u") }];
+  const get = { type: "FunctionDeclaration", async: true, id: I("get"), params: [], start, end: body.end, body };
+  const pageBody = { type: "BlockStatement", start: code.indexOf("{"), end: code.length, body: [{ type: "ReturnStatement" }, get] };
+  const page = { type: "FunctionDeclaration", id: I("Page"), params: [I("u")], body: pageBody };
+  const out = transformUseCache(code, { type: "Program", body: [page] }, "h.js");
+  assert.match(out, new RegExp(`function Page\\(u\\) \\{ __vinext_cacheRef\\("h\\.js:${start}", get, \\(\\) => \\(\\{ u \\}\\)\\); return 1; async function get\\(\\) \\{ return __vinext_useCache`));
+});

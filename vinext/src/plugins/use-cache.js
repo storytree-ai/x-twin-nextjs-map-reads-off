@@ -152,7 +152,14 @@ function wrapEdits(fn, outer, parent, id, directive) {
     const mark = `${JSON.stringify(id)}, `;
     const getter = bound ? `, () => (${bound})` : "";
     if (fn.type === "FunctionDeclaration") {
-      edits.push({ at: fn.end, end: fn.end, text: ` __vinext_cacheRef(${mark}${fn.id.name}${getter});` });
+      // Hoisted, so marked where its block starts (after any directives),
+      // ahead of code that may read it; the getter reads its values later.
+      let at = fn.end;
+      if (parent.type === "BlockStatement") {
+        const directives = parent.body.filter((s) => typeof s.directive === "string");
+        at = directives.length ? directives[directives.length - 1].end : parent.start + 1;
+      }
+      edits.push({ at, end: at, text: ` __vinext_cacheRef(${mark}${fn.id.name}${getter});` });
     } else {
       // Ahead of the body's closing edits, which may share fn.end.
       edits.push({ at: fn.end, end: fn.end, text: `${getter})` }, { at: fn.start, end: fn.start, text: `__vinext_cacheRef(${mark}` });
