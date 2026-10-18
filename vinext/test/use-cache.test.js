@@ -231,3 +231,50 @@ test("a cached function declaration is marked where its block starts, as it is h
   const out = transformUseCache(code, { type: "Program", body: [page] }, "h.js");
   assert.match(out, new RegExp(`function Page\\(u\\) \\{ __vinext_cacheRef\\("h\\.js:${start}", get, \\(\\) => \\(\\{ u \\}\\)\\); return 1; async function get\\(\\) \\{ return __vinext_useCache`));
 });
+
+test("a closed-over promise keys by what it resolves to", async () => {
+  let calls = 0;
+  const run = (params) => __vinext_useCache("t:6", [], async () => ++calls, { params });
+  assert.equal(await run(Promise.resolve({ id: 1 })), 1);
+  assert.equal(await run(Promise.resolve({ id: 1 })), 1);
+  assert.equal(await run(Promise.resolve({ id: 2 })), 2);
+});
+
+test("closed-over values that only look alike key apart", async () => {
+  let calls = 0;
+  const run = (v) => __vinext_useCache("t:7", [], async () => ++calls, { v });
+  const pairs = [
+    [new Map([["a", 1]]), { $map: [["a", 1]] }],
+    [1n, { $bigint: "1" }],
+    [NaN, null],
+    [new Date(0), new Date(0).toISOString()],
+    [[undefined], [null]],
+  ];
+  for (const [a, b] of pairs) {
+    const first = await run(a);
+    assert.equal(await run(a), first);
+    assert.notEqual(await run(b), first, `${String(a)} and ${JSON.stringify(b)} share a key`);
+  }
+});
+
+test("a cached function declaration in a switch case is marked at every case", () => {
+  const code = 'function Page(u) { switch (u) { case 1: return 1; case 2: async function get() { "use cache"; return u; } } }';
+  const start = code.indexOf("async function");
+  const body = { type: "BlockStatement", start: code.indexOf("{", start), end: code.indexOf("} }", start) + 1 };
+  const d = code.indexOf('"use cache";');
+  body.body = [{ type: "ExpressionStatement", directive: "use cache", start: d, end: d + 12 }, { type: "ReturnStatement", argument: I("u") }];
+  const get = { type: "FunctionDeclaration", async: true, id: I("get"), params: [], start, end: body.end, body };
+  const ret = { type: "ReturnStatement", start: code.indexOf("return 1"), end: code.indexOf("return 1") + 9 };
+  const sw = {
+    type: "SwitchStatement",
+    discriminant: I("u"),
+    cases: [
+      { type: "SwitchCase", test: { type: "Literal" }, consequent: [ret] },
+      { type: "SwitchCase", test: { type: "Literal" }, consequent: [get] },
+    ],
+  };
+  const page = { type: "FunctionDeclaration", id: I("Page"), params: [I("u")], body: block([sw]) };
+  const out = transformUseCache(code, { type: "Program", body: [page] }, "w.js");
+  const mark = `__vinext_cacheRef\\("w\\.js:${start}", get, \\(\\) => \\(\\{ u \\}\\)\\); `;
+  assert.match(out, new RegExp(`case 1: ${mark}return 1; case 2: ${mark}async function get`));
+});

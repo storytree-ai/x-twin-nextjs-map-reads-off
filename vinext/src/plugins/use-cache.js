@@ -20,13 +20,13 @@ function* children(node) {
   }
 }
 
-/** Every function node in the tree, with the functions that enclose it (outermost first) and its parent. */
-function* functions(node, outer = [], parent = null) {
+/** Every function node in the tree, with the functions that enclose it (outermost first), its parent and the switch its case is in. */
+function* functions(node, outer = [], parent = null, grandparent = null) {
   if (!node || typeof node.type !== "string") return;
   const isFn = FUNCTION_TYPES.has(node.type);
-  if (isFn) yield { fn: node, outer, parent };
+  if (isFn) yield { fn: node, outer, parent, outerSwitch: grandparent && grandparent.type === "SwitchStatement" ? grandparent : null };
   const next = isFn ? [...outer, node] : outer;
-  for (const c of children(node)) yield* functions(c, next, node);
+  for (const c of children(node)) yield* functions(c, next, node, parent);
 }
 
 /** The exported (async) functions of a module. */
@@ -140,7 +140,7 @@ const isMethod = (parent) =>
  * it reads from enclosing functions. An inline fn is also marked as cached
  * (with those values), so another cached function may close over it.
  */
-function wrapEdits(fn, outer, parent, id, directive) {
+function wrapEdits(fn, outer, parent, outerSwitch, id, directive) {
   // Arrow functions have no `arguments`: their parameters' names key the entry.
   const args =
     fn.type === "ArrowFunctionExpression" ? `[${fn.params.flatMap((p) => boundNames(p)).join(", ")}]` : "Array.from(arguments)";
@@ -154,12 +154,19 @@ function wrapEdits(fn, outer, parent, id, directive) {
     if (fn.type === "FunctionDeclaration") {
       // Hoisted, so marked where its block starts (after any directives),
       // ahead of code that may read it; the getter reads its values later.
-      let at = fn.end;
+      // In a switch it belongs to the whole switch: marked at each case.
+      const text = `__vinext_cacheRef(${mark}${fn.id.name}${getter});`;
       if (parent.type === "BlockStatement") {
         const directives = parent.body.filter((s) => typeof s.directive === "string");
-        at = directives.length ? directives[directives.length - 1].end : parent.start + 1;
+        const at = directives.length ? directives[directives.length - 1].end : parent.start + 1;
+        edits.push({ at, end: at, text: ` ${text}` });
+      } else if (parent.type === "SwitchCase" && outerSwitch) {
+        for (const c of outerSwitch.cases) {
+          if (c.consequent.length) edits.push({ at: c.consequent[0].start, end: c.consequent[0].start, text: `${text} ` });
+        }
+      } else {
+        edits.push({ at: fn.end, end: fn.end, text: ` ${text}` });
       }
-      edits.push({ at, end: at, text: ` __vinext_cacheRef(${mark}${fn.id.name}${getter});` });
     } else {
       // Ahead of the body's closing edits, which may share fn.end.
       edits.push({ at: fn.end, end: fn.end, text: `${getter})` }, { at: fn.start, end: fn.start, text: `__vinext_cacheRef(${mark}` });
@@ -187,16 +194,16 @@ export function transformUseCache(code, ast, file) {
   const edits = [];
   const fileLevel = isUseCache(ast.body[0]);
   const seen = new Set();
-  const add = (fn, outer, parent, directive) => {
+  const add = (fn, outer, parent, outerSwitch, directive) => {
     if (seen.has(fn)) return;
     seen.add(fn);
-    edits.push(...wrapEdits(fn, outer, parent, `${file}:${fn.start}`, directive));
+    edits.push(...wrapEdits(fn, outer, parent, outerSwitch, `${file}:${fn.start}`, directive));
   };
-  for (const { fn, outer, parent } of functions(ast)) {
+  for (const { fn, outer, parent, outerSwitch } of functions(ast)) {
     const first = fn.body && fn.body.type === "BlockStatement" ? fn.body.body[0] : null;
-    if (isUseCache(first)) add(fn, outer, parent, first);
+    if (isUseCache(first)) add(fn, outer, parent, outerSwitch, first);
   }
-  if (fileLevel) for (const fn of exportedFunctions(ast)) add(fn, [], null, null);
+  if (fileLevel) for (const fn of exportedFunctions(ast)) add(fn, [], null, null, null);
   if (!edits.length) return null;
   const marks = edits.some((e) => e.text.includes("__vinext_cacheRef("));
   edits.sort((a, b) => b.at - a.at);
