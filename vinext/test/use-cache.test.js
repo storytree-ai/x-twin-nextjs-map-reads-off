@@ -2,7 +2,7 @@ import { test } from "node:test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import assert from "node:assert/strict";
 import { transformUseCache } from "../src/plugins/use-cache.js";
-import { __vinext_useCache, cacheLife, cacheTag, revalidateTag } from "../src/shims/cache.js";
+import { __vinext_cacheRef, __vinext_useCache, cacheLife, cacheTag, revalidateTag } from "../src/shims/cache.js";
 
 // Minimal ESTree nodes with start/end offsets, as Vite's parseAst gives them.
 function fnAst(code) {
@@ -80,7 +80,7 @@ test("an inline cached function keys on the outer values it reads", () => {
   const at = (s, from = 0) => code.indexOf(s, from);
   const id = (name, start) => ({ type: "Identifier", name, start, end: start + name.length });
   const arrowStart = at("async ()");
-  const arrowBody = { type: "BlockStatement", start: at("{", arrowStart), end: at("; }", arrowStart) + 1 };
+  const arrowBody = { type: "BlockStatement", start: at("{", arrowStart), end: at("}; }", arrowStart) + 1 };
   const d = at('"use cache";');
   arrowBody.body = [
     { type: "ExpressionStatement", directive: "use cache", start: d, end: d + 12 },
@@ -113,7 +113,7 @@ test("an inline cached function keys on the outer values it reads", () => {
   };
   const out = transformUseCache(code, { type: "Program", body: [page] }, "p.js");
   // userId is Page's; obj is not bound in Page; .label is a property, not the outer label.
-  assert.match(out, new RegExp(`__vinext_useCache\\("p\\.js:${arrowStart}", \\[\\[\\], \\[userId\\]\\], async`));
+  assert.match(out, new RegExp(`__vinext_useCache\\("p\\.js:${arrowStart}", \\[\\], async \\(\\) => \\{ return userId \\+ obj\\.label; \\}, \\{ userId \\}\\); \\}`));
 });
 
 test("a file-level 'use cache' wraps every exported async function", () => {
@@ -132,4 +132,81 @@ test("a file-level 'use cache' wraps every exported async function", () => {
     transformUseCache(code, ast, "f.js"),
     new RegExp(`export async function get\\(a\\) \\{return __vinext_useCache\\("f\\.js:${fnStart}", Array\\.from\\(arguments\\), async \\(\\) => \\{ return a; \\}\\); \\}$`),
   );
+});
+
+// Builders for the ESTree nodes the tests below hand to transformUseCache;
+// only the cached function and its directive carry offsets.
+const I = (name) => ({ type: "Identifier", name });
+const block = (body) => ({ type: "BlockStatement", body });
+const decl = (kind, name, init = { type: "Literal" }) => ({
+  type: "VariableDeclaration",
+  kind,
+  declarations: [{ type: "VariableDeclarator", id: I(name), init }],
+});
+/** The `async () => { "use cache"; ... }` arrow at its offset in code, with the given statements after the directive. */
+function cachedArrow(code, statements) {
+  const start = code.indexOf("async () => {");
+  const body = { type: "BlockStatement", start: code.indexOf("{", start), end: code.indexOf("}; }", start) + 1 };
+  const d = code.indexOf('"use cache";', start);
+  body.body = [{ type: "ExpressionStatement", directive: "use cache", start: d, end: d + 12 }, ...statements];
+  return { type: "ArrowFunctionExpression", async: true, params: [], start, end: body.end, body };
+}
+
+test("closed-over names follow block scope", () => {
+  const code =
+    'function Page(c, e) { if (c) { const a = 1; var b = 2; } { const d = 3; const get = async () => { "use cache"; { const e = 0; } return [a, b, d, e]; }; } }';
+  const arrow = cachedArrow(code, [
+    block([decl("const", "e")]),
+    { type: "ReturnStatement", argument: { type: "ArrayExpression", elements: [I("a"), I("b"), I("d"), I("e")] } },
+  ]);
+  const page = {
+    type: "FunctionDeclaration",
+    id: I("Page"),
+    params: [I("c"), I("e")],
+    body: block([
+      { type: "IfStatement", test: I("c"), consequent: block([decl("const", "a"), decl("var", "b")]) },
+      block([decl("const", "d"), decl("const", "get", arrow)]),
+    ]),
+  };
+  const out = transformUseCache(code, { type: "Program", body: [page] }, "s.js");
+  // a is const in a block the cached function is not in; b is var (the whole of Page's);
+  // the e the cached function returns is Page's parameter, not its own block's.
+  assert.match(out, /return \[a, b, d, e\]; \}, \{ b, d, e \}\); \}/);
+});
+
+test("an inline cached function is marked, so another cached function may close over it", () => {
+  const code = 'function Page(u) { const get = async () => { "use cache"; return u; }; }';
+  const arrow = cachedArrow(code, [{ type: "ReturnStatement", argument: I("u") }]);
+  const page = { type: "FunctionDeclaration", id: I("Page"), params: [I("u")], body: block([decl("const", "get", arrow)]) };
+  const out = transformUseCache(code, { type: "Program", body: [page] }, "m.js");
+  assert.match(out, /^import \{ __vinext_useCache, __vinext_cacheRef \} from "next\/cache";/);
+  assert.match(
+    out,
+    new RegExp(
+      `const get = __vinext_cacheRef\\("m\\.js:${arrow.start}", async \\(\\) => \\{ return __vinext_useCache\\("m\\.js:${arrow.start}", \\[\\], async \\(\\) => \\{ return u; \\}, \\{ u \\}\\); \\}, \\(\\) => \\(\\{ u \\}\\)\\); \\}$`,
+    ),
+  );
+});
+
+test("closed-over values key the entry, and a function among them is refused", async () => {
+  let calls = 0;
+  const run = (closure) => __vinext_useCache("t:3", [], async () => ++calls, closure);
+  assert.equal(await run({ user: 1n, tags: new Set(["a"]) }), 1);
+  assert.equal(await run({ user: 1n, tags: new Set(["a"]) }), 1);
+  assert.equal(await run({ user: 1n, tags: new Set(["b"]) }), 2);
+  await assert.rejects(run({ format: () => "x" }), /reads format .*Functions cannot be passed directly/);
+  await assert.rejects(run({ when: new (class Clock {})() }), /Classes or null prototypes are not supported/);
+  assert.equal(calls, 2);
+});
+
+test("a closed-over cached function or server action keys by its id and its own closure", async () => {
+  let calls = 0;
+  const inner = (user) => __vinext_cacheRef("t:inner", async () => user, () => ({ user }));
+  const run = (getUser) => __vinext_useCache("t:4", [], async () => ++calls, { getUser });
+  assert.equal(await run(inner(1)), 1);
+  assert.equal(await run(inner(1)), 1);
+  assert.equal(await run(inner(2)), 2);
+  const action = Object.assign(async () => {}, { $$typeof: Symbol.for("react.server.reference"), $$id: "act#1", $$bound: null });
+  assert.equal(await run(action), 3);
+  assert.equal(await run(action), 3);
 });

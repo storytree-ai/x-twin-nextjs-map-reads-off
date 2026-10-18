@@ -4,7 +4,8 @@
 // revalidated, so a server action re-renders the page it was called from.
 // "use cache" functions run through __vinext_useCache (see
 // plugins/use-cache.js): their results are kept per arguments for their
-// cacheLife profile and dropped by revalidateTag of a cacheTag they set.
+// cacheLife profile and dropped by revalidateTag of a cacheTag they set;
+// the values they close over key them too.
 
 const entries = (globalThis.__VINEXT_DATA_CACHE__ ??= new Map());
 
@@ -82,9 +83,79 @@ function cacheContext() {
 }
 const currentEntry = () => (cacheContext() && cacheContext().getStore()) || scope;
 
-function cacheKey(id, args) {
+// Inline "use cache" functions (marked where they are made), by value: their
+// id and a getter for the values they close over.
+const cacheRefs = new WeakMap();
+
+/** Mark fn as the inline "use cache" function id. */
+export function __vinext_cacheRef(id, fn, closure) {
+  cacheRefs.set(fn, { id, closure });
+  return fn;
+}
+
+class Unserializable extends Error {}
+const SERVER_REFERENCE = Symbol.for("react.server.reference");
+const CLIENT_REFERENCE = Symbol.for("react.client.reference");
+const ELEMENTS = new Set([Symbol.for("react.transitional.element"), Symbol.for("react.element")]);
+
+// A JSON.stringify replacer for the values a cached function closes over,
+// which Next.js serializes as a server function's bound arguments: what React
+// cannot pass (other functions, local symbols, class instances) is refused
+// with React's words.
+function boundValue(key, value) {
+  if (typeof value === "bigint") return { $bigint: String(value) };
+  if (typeof value === "symbol") {
+    const name = Symbol.keyFor(value);
+    if (name === undefined) {
+      throw new Unserializable(
+        `Only global symbols received from Symbol.for(...) can be passed to Server Functions. The symbol ${String(value)} cannot be found among global symbols.`,
+      );
+    }
+    return { $symbol: name };
+  }
+  if (typeof value === "function") {
+    if (value.$$typeof === SERVER_REFERENCE) return { $action: value.$$id, bound: value.$$bound ?? null };
+    if (value.$$typeof === CLIENT_REFERENCE) return { $client: value.$$id };
+    const ref = cacheRefs.get(value);
+    if (ref) return { $cache: ref.id, bound: ref.closure ? ref.closure() : null };
+    throw new Unserializable(
+      'Functions cannot be passed directly to Server Functions unless you explicitly expose it by marking it with "use server".',
+    );
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (ELEMENTS.has(value.$$typeof)) {
+    const { type } = value;
+    const name = typeof type === "string" ? type : typeof type === "symbol" ? String(type) : type.$$id || type.displayName || type.name;
+    return { $element: name, key: value.key, props: value.props };
+  }
+  if (value instanceof Map) return { $map: [...value] };
+  if (value instanceof Set) return { $set: [...value] };
+  if (value instanceof ArrayBuffer) return { $bytes: [...new Uint8Array(value)] };
+  if (ArrayBuffer.isView(value)) {
+    return { $bytes: [...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)], view: value.constructor.name };
+  }
+  if (value instanceof Error) return { $error: value.name, message: value.message };
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && !(value instanceof Promise)) {
+    throw new Unserializable(
+      "Only plain objects, and a few built-ins, can be passed to Server Functions. Classes or null prototypes are not supported.",
+    );
+  }
+  return value;
+}
+
+function cacheKey(id, args, closure) {
+  let bound = "";
+  for (const [name, value] of Object.entries(closure || {})) {
+    try {
+      bound += `:${JSON.stringify(value, boundValue)}`;
+    } catch (err) {
+      if (err instanceof Unserializable) throw new Error(`A "use cache" function (${id}) reads ${name} from an enclosing function: ${err.message}`);
+      return null;
+    }
+  }
   try {
-    return `${id}:${JSON.stringify(args)}`;
+    return `${id}:${JSON.stringify(args)}${bound}`;
   } catch {
     return null; // arguments that cannot be keyed are not cached
   }
@@ -109,8 +180,13 @@ function fill(key, fn) {
 }
 
 /** Run a "use cache" function body, or answer its cached result. */
-export function __vinext_useCache(id, args, fn) {
-  const key = cacheKey(id, args);
+export function __vinext_useCache(id, args, fn, closure) {
+  let key;
+  try {
+    key = cacheKey(id, args, closure);
+  } catch (err) {
+    return Promise.reject(err);
+  }
   const hit = key !== null && useCacheEntries.get(key);
   if (hit) {
     const age = (Date.now() - hit.at) / 1000;
