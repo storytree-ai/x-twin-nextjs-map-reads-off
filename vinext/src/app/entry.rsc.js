@@ -20,7 +20,7 @@ import { createAppRequestStore, takeSetCookies } from "../shims/headers.js";
 import { NextRequest } from "../shims/server.js";
 import { runWithRequestStore } from "../server/ssr-context.js";
 import { resolveMetadata, resolveViewport, metadataTags } from "./metadata.js";
-import { metadataRouteResponse } from "./metadata-routes.js";
+import { metadataRouteResponse, dynamicIconLink } from "./metadata-routes.js";
 import { segmentConfig, pageCacheControl, inStaticParams } from "./segment-config.js";
 
 const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
@@ -57,15 +57,27 @@ function pickParams(params, names) {
 
 const isClientReference = (c) => !!c && c.$$typeof === Symbol.for("react.client.reference");
 
+/** The <link> props of app/'s icon files, generated icons' completed from their modules. */
+function iconLinks() {
+  return Promise.all(
+    fileIcons.map(async (icon) => {
+      if (!icon.dynamic) return icon;
+      const route = metadataRoutes.find((r) => r.path === icon.href.split("?")[0]);
+      return dynamicIconLink(icon, await route.module());
+    }),
+  );
+}
+
 /** The <head> elements for the metadata and viewport of layouts (and the page, when given). */
 async function headElements(mods, params, searchParams, pageMod) {
   const layouts = mods.map((m) => m.layout);
   const names = mods.map((m) => m.paramNames);
-  const [md, vp] = await Promise.all([
+  const [md, vp, icons] = await Promise.all([
     resolveMetadata(layouts, names, params, searchParams, pageMod),
     resolveViewport(layouts, names, params, searchParams, pageMod),
+    iconLinks(),
   ]);
-  return metadataTags(md, vp, fileIcons).map((t, i) => h(t.tag, { key: `m${i}`, ...t.props }, t.children));
+  return metadataTags(md, vp, icons).map((t, i) => h(t.tag, { key: `m${i}`, ...t.props }, t.children));
 }
 
 async function load(lazy) {

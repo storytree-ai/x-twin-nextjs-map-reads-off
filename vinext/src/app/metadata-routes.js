@@ -1,5 +1,6 @@
 // app/robots.ts, sitemap.ts and manifest.ts: their default export's data
-// serialized as Next.js serializes it.
+// serialized as Next.js serializes it; app/icon.tsx and apple-icon.tsx: the
+// image their default export answers.
 
 const toArray = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
 
@@ -86,8 +87,17 @@ const SERIALIZERS = {
   manifest: [(data) => JSON.stringify(data), "application/manifest+json"],
 };
 
+/** The <link> props of a generated icon: its contentType and size exports. */
+export function dynamicIconLink({ rel, href }, mod) {
+  const props = { rel, href, type: mod.contentType || "image/png" };
+  if (mod.size) props.sizes = `${mod.size.width}x${mod.size.height}`;
+  return props;
+}
+
 /** The Response for a metadata route module. */
 export async function metadataRouteResponse(type, mod) {
+  // A generated image (app/icon.tsx): the default export answers it.
+  if (type === "image") return await mod.default({ params: Promise.resolve({}) });
   const [serialize, contentType] = SERIALIZERS[type];
   const data = typeof mod.default === "function" ? await mod.default() : mod.default;
   return new Response(serialize(data), {
