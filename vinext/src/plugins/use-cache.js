@@ -149,19 +149,34 @@ function inferredName(fn, parent) {
 }
 
 /**
- * Whether node reads its function's this or super (not a nested function's
- * or class's own, nor the this the dev JSX runtime is handed as an
- * element's source: the code is checked after JSX is compiled).
+ * What node reads of its function's own this, super or arguments ("this",
+ * "super", "arguments"), or null (not a nested function's or class
+ * member's own, nor the this the dev JSX runtime is handed as an element's
+ * source: the code is checked after JSX is compiled).
  */
-function readsThis(node) {
-  if (node.type === "ThisExpression" || node.type === "Super") return true;
-  if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression") return false;
-  if (node.type === "ClassBody") return node.body.some((m) => m.computed && readsThis(m.key)); // its members have their own
-  if (node.type === "CallExpression" && node.callee.type === "Identifier" && /^_?jsxDEV$/.test(node.callee.name)) {
-    return [node.callee, ...node.arguments].some((c, i) => !(i === 6 && c.type === "ThisExpression") && readsThis(c));
+function forbiddenUse(node, parent = null, key = null) {
+  if (node.type === "ThisExpression") return "this";
+  if (node.type === "Super") return "super";
+  if (node.type === "Identifier") return node.name === "arguments" && (!parent || isReference(parent, key)) ? "arguments" : null;
+  if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression") return null;
+  if (node.type === "ClassBody") {
+    // Its members have their own; their computed keys read the function's.
+    for (const m of node.body) {
+      const use = m.computed && forbiddenUse(m.key);
+      if (use) return use;
+    }
+    return null;
   }
-  for (const c of children(node)) if (readsThis(c)) return true;
-  return false;
+  const jsxDev = node.type === "CallExpression" && node.callee.type === "Identifier" && /^_?jsxDEV$/.test(node.callee.name);
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    for (const [i, c] of (Array.isArray(v) ? v : [v]).entries()) {
+      if (!c || typeof c.type !== "string" || (jsxDev && k === "arguments" && i === 5 && c.type === "ThisExpression")) continue;
+      const use = forbiddenUse(c, node, k);
+      if (use) return use;
+    }
+  }
+  return null;
 }
 
 const isMethod = (parent) =>
@@ -234,8 +249,9 @@ export function transformUseCache(code, ast, file) {
   const add = (fn, outer, parent, outerSwitch, directive) => {
     if (seen.has(fn)) return;
     seen.add(fn);
-    // As Next.js refuses it: the cached result would not depend on this.
-    if (fn.params.some(readsThis) || readsThis(fn.body)) throw new Error(`${file}: "use cache" functions cannot use \`this\`.`);
+    // As Next.js refuses them (its server-actions transform, ThisStatus::Forbidden).
+    const use = [...fn.params, fn.body].reduce((use, n) => use || forbiddenUse(n), null);
+    if (use) throw new Error(`${file}: "use cache" functions cannot use \`${use}\`.`);
     edits.push(...wrapEdits(fn, outer, parent, outerSwitch, `${file}:${fn.start}`, directive));
   };
   for (const { fn, outer, parent, outerSwitch } of functions(ast)) {
