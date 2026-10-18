@@ -409,6 +409,18 @@ test("a call passed a function or class instance is not cached, as Next.js passe
   assert.equal(await run(c), 3);
   assert.equal(await run(c), 4);
   await assert.rejects(run(Symbol("local")), /Only global symbols/);
+  // Its closed-over values are still keyed: refused, or awaited.
+  const withClosure = (closure) => __vinext_useCache("t:temp", [f], async () => ++calls, closure);
+  await assert.rejects(withClosure({ g: () => 2 }), /reads g .*Functions cannot be passed directly/);
+  await assert.rejects(withClosure({ p: Promise.reject(new Error("gone")) }), /gone/);
+  assert.equal(calls, 4);
+});
+
+test("a value shared between an argument and a closed-over value keys as one, as React encodes them together", async () => {
+  let calls = 0;
+  const run = (a, v) => __vinext_useCache("t:share", [a], async () => ++calls, { v });
+  const shared = { n: 1 };
+  assert.notEqual(await run(shared, shared), await run({ n: 1 }, { n: 1 }));
 });
 
 test("a closed-over value that refers to itself is keyed, as React serializes cycles", async () => {
