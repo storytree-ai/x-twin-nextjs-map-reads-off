@@ -16,7 +16,7 @@ import { searchToQuery, trailingSlashRedirect } from "./request-utils.js";
 import { loadRules, collectHeaders, findRedirect, findRewrite } from "./config-rules.js";
 import { runMiddleware } from "./middleware.js";
 import { createIsrCache, isrCacheControl } from "./isr-cache.js";
-import { runWithRequestStore } from "./ssr-context.js";
+import { runWithRequestStore, takeInsertedHTML } from "./ssr-context.js";
 import { reportRequestError } from "./instrumentation.js";
 
 const BUILD_ID = "development";
@@ -419,7 +419,7 @@ async function renderPage(server, ctx, scan, route, params, pageMod, opts) {
     renderToPipeableStream,
     createElement(App, { ...appProps, Component: pageMod.default, pageProps, router: routerShim.default }),
   );
-  const headHtml = headShim.getSSRHeadHTML();
+  const headHtml = headShim.getSSRHeadHTML() + takeInsertedHTML();
   headShim.resetSSRHead();
 
   const nextData = {

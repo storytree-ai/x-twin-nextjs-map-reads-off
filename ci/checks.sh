@@ -83,7 +83,7 @@ grep -q '"page":"/posts/\[id\]"' "$WORK/body.html" || fail "data route did not a
 grep -q '"id":"7"' "$WORK/body.html" || fail "data route did not carry GSSP props"
 
 headers /isr-test
-[ -n "$(header x-vinext-cache)" ] || fail "ISR page has no X-Vinext-Cache"
+[ "$(header x-vinext-cache)" = "MISS" ] || fail "first ISR request was not a MISS"
 header cache-control | grep -q "s-maxage=1, stale-while-revalidate" || fail "ISR page Cache-Control is wrong"
 headers /isr-test
 [ "$(header x-vinext-cache)" = "HIT" ] || fail "second ISR request was not a HIT"

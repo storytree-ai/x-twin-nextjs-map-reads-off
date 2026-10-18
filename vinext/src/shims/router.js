@@ -170,10 +170,11 @@ async function change(method, href, as, options = {}) {
   events.emit("routeChangeStart", asPath, routeOptions);
 
   // Shallow: same page, new URL and query, no data fetching.
-  if (options.shallow && client.matchPattern(realUrl.pathname) === state.pathname) {
+  const target = options.shallow ? client.matchPattern(realUrl.pathname) : null;
+  if (target && target.pattern === state.pathname) {
     events.emit("beforeHistoryChange", asPath, routeOptions);
     writeHistory(method, toAsPath(realUrl), asPath, options);
-    setClientRouterState({ asPath, query: buildQuery(state.pathname, realUrl.search, state.query) });
+    setClientRouterState({ asPath, query: buildQuery(target.pattern, realUrl.search, target.params) });
     scrollAfterNavigation(shownUrl, options.scroll === false ? false : undefined);
     events.emit("routeChangeComplete", asPath, routeOptions);
     return true;
@@ -363,7 +364,8 @@ export function createRouter() {
 
 /**
  * Browser bootstrap, called by the client entry before hydration with the
- * initial state and { loadPage(pattern), matchPattern(pathname), render(page, state) }.
+ * initial state and { loadPage(pattern), matchPattern(pathname) → { pattern, params },
+ * render(page, state) → Promise }.
  */
 export function _initClientRouter(state, hooks) {
   setClientRouterState(state);

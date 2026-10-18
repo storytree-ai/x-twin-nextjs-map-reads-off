@@ -5,26 +5,7 @@ import { hydrateRoot } from "react-dom/client";
 import { _initClientRouter } from "../shims/router.js";
 import { setClientRouterState } from "../shims/router-state.js";
 import DefaultApp from "../shims/app.js";
-
-/** A matcher over route patterns, in the server's (most specific first) order. */
-export function createPatternMatcher(patterns) {
-  const compiled = patterns.map((pattern) => {
-    const parts = pattern.split("/").filter(Boolean);
-    let re = "";
-    for (const part of parts) {
-      if (/^\[\[\.\.\..+\]\]$/.test(part)) re += "(?:/.+)?";
-      else if (/^\[\.\.\..+\]$/.test(part)) re += "/.+";
-      else if (/^\[.+\]$/.test(part)) re += "/[^/]+";
-      else re += "/" + part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-    return { pattern, regex: new RegExp(`^${re || "/"}$`) };
-  });
-  return (pathname) => {
-    const p = pathname.length > 1 ? pathname.replace(/\/$/, "") : pathname;
-    const hit = compiled.find((c) => c.regex.test(p));
-    return hit ? hit.pattern : null;
-  };
-}
+import { createPatternMatcher } from "./route-matcher.js";
 
 export async function startPagesClient({ pages, patterns, loadApp }) {
   const dataEl = document.getElementById("__NEXT_DATA__");
