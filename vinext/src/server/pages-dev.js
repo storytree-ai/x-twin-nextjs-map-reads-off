@@ -8,6 +8,7 @@
 import { createElement } from "react";
 import { Writable } from "node:stream";
 import { scanPagesDir, matchRoute } from "../routing/pages-routes.js";
+import { scanAppDir } from "../routing/app-routes.js";
 import { shimPath } from "../shims/index.js";
 import { PAGES_CLIENT_URL } from "../client/pages-entry.js";
 import { handleApiRoute } from "./api.js";
@@ -51,7 +52,10 @@ export function dataRequestPath(pathname) {
 
 const isDynamic = (route) => route.segments.some((s) => s.type !== "static");
 
-/** The api or page route for pathname: static routes only, dynamic only, or both. */
+/**
+ * The api, page or app route for pathname: static routes only, dynamic
+ * only, or both. App routes are answered by the App Router's handler.
+ */
 function matchFiles(scan, pathname, which) {
   const pick = (routes) =>
     routes.filter((r) => which === "all" || (which === "dynamic") === isDynamic(r));
@@ -59,7 +63,17 @@ function matchFiles(scan, pathname, which) {
   if (api) return { kind: "api", match: api };
   const page = matchRoute(pick(scan.pages), pathname);
   if (page) return { kind: "page", match: page };
+  const app = matchRoute(pick(scan.app), pathname);
+  if (app) return { kind: "app", match: app };
   return null;
+}
+
+/** A query object as a search string ("" or "?a=1&b=2"). */
+function queryToSearch(query) {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) for (const x of [].concat(v)) sp.append(k, x);
+  const s = sp.toString();
+  return s ? `?${s}` : "";
 }
 
 function setResponseHeader(res, key, value) {
@@ -107,16 +121,26 @@ function replaceRequestHeaders(req, headers) {
   Object.assign(req.headers, headers);
 }
 
+/**
+ * The request pipeline for both routers (pages/ may be absent): next.config
+ * headers and redirects, middleware and rewrites run here once, then Pages
+ * routes render here and App Router routes go on to its handler (next())
+ * with req.url set to the path they resolved to.
+ */
 export function createPagesDevHandler(server, ctx) {
   let rules = null;
+  let appRoutes = null;
   const isr = createIsrCache();
   // An edited page (or anything it imports) must not keep serving its old ISR HTML.
   server.watcher.on("change", () => isr.clear());
+  server.watcher.on("add", () => (appRoutes = null));
+  server.watcher.on("unlink", () => (appRoutes = null));
 
   return async function vinextPages(req, res, next) {
     let url;
     try {
-      url = new URL(req.url || "/", "http://localhost");
+      // Concatenated, so "//host/x" stays a path rather than becoming a host.
+      url = new URL("http://localhost" + (req.url || "/"));
     } catch {
       return next();
     }
@@ -124,6 +148,11 @@ export function createPagesDevHandler(server, ctx) {
     const dataPath = dataRequestPath(url.pathname);
     const isData = dataPath !== null;
     let pathname = isData ? dataPath : url.pathname;
+    // /path.rsc asks for /path's RSC payload, as a client navigation does.
+    if (ctx.appDir && !isData && pathname.endsWith(".rsc")) {
+      pathname = pathname.slice(0, -4) || "/";
+      req.headers.rsc = "1";
+    }
 
     // Next.js strips trailing slashes by default.
     const strippedLocation =
@@ -138,8 +167,11 @@ export function createPagesDevHandler(server, ctx) {
     const errorContext = { routerKind: "Pages Router", routePath: pathname, routeType: "render" };
     try {
       rules ??= await loadRules(ctx.nextConfig);
-      const scan = scanPagesDir(ctx.pagesDir);
+      if (ctx.appDir) appRoutes ??= scanAppDir(ctx.appDir).routes;
+      const scan = ctx.pagesDir ? scanPagesDir(ctx.pagesDir) : { pages: [], api: [], special: {} };
+      scan.app = appRoutes || [];
       let query = searchToQuery(url.searchParams);
+      let rewriteStatus = null;
       const original = { headers: { ...req.headers }, query };
 
       // 1-2. next.config headers and redirects see the request as it came.
@@ -166,6 +198,7 @@ export function createPagesDevHandler(server, ctx) {
           }
           pathname = mw.url.pathname;
           query = { ...query, ...searchToQuery(mw.url.searchParams) };
+          rewriteStatus = mw.status || null;
         }
       }
 
@@ -206,7 +239,11 @@ export function createPagesDevHandler(server, ctx) {
       }
       const asPath = isData ? pathname + url.search : url.pathname + url.search;
       const page = target && target.kind === "page" ? target.match : null;
-      if (!page && ctx.appDir && !isData) return next();
+      if (!page && ctx.appDir && !isData) {
+        req.url = pathname + queryToSearch(query);
+        req.vinextStatus = rewriteStatus;
+        return next();
+      }
       return await runWithRequestStore(() =>
         servePage(server, ctx, scan, isr, page, { req, res, query, asPath, pathname, isData }),
       );

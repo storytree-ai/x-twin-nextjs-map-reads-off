@@ -161,7 +161,7 @@ export default function vinext(options = {}) {
         server.middlewares.use((req, res, next) => {
           ensureInstrumentation(server, ctx).then(() => next(), next);
         });
-        if (ctx.pagesDir) server.middlewares.use(createPagesDevHandler(server, ctx));
+        if (ctx.pagesDir || ctx.appDir) server.middlewares.use(createPagesDevHandler(server, ctx));
         if (ctx.appDir && server.environments.rsc) {
           server.middlewares.use(createAppDevHandler(server, ctx, APP_ENTRIES.rsc));
         }

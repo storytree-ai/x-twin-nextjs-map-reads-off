@@ -41,7 +41,7 @@ function serveStaticMetadata(appDir, pathname, res) {
 /** A Web Request for a Node request (the body streamed for non-GET/HEAD). */
 export function toWebRequest(req) {
   const host = req.headers.host || "localhost";
-  const url = new URL(req.originalUrl || req.url || "/", `http://${host}`);
+  const url = new URL(`http://${host}${req.url || "/"}`);
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) {
     if (k.startsWith(":") || v === undefined) continue;
@@ -58,8 +58,8 @@ export function toWebRequest(req) {
 }
 
 /** Stream a Web Response to a Node response, keeping headers already set. */
-export async function sendWebResponse(res, response) {
-  res.statusCode = response.status;
+export async function sendWebResponse(res, response, status) {
+  res.statusCode = status || response.status;
   for (const [k, v] of response.headers) {
     if (k === "set-cookie" || k === "content-length") continue;
     res.setHeader(k, v);
@@ -84,7 +84,7 @@ export function createAppDevHandler(server, ctx, entryFile) {
   return async function vinextApp(req, res, next) {
     let pathname;
     try {
-      pathname = new URL(req.url || "/", "http://localhost").pathname;
+      pathname = new URL("http://localhost" + (req.url || "/")).pathname;
     } catch {
       return next();
     }
@@ -93,7 +93,7 @@ export function createAppDevHandler(server, ctx, entryFile) {
     try {
       const entry = await server.environments.rsc.runner.import(entryFile);
       const response = await entry.default(toWebRequest(req));
-      await sendWebResponse(res, response);
+      await sendWebResponse(res, response, req.vinextStatus);
     } catch (err) {
       console.error(err);
       await reportRequestError(ctx, err, req, { routerKind: "App Router", routePath: pathname, routeType: "render" });
