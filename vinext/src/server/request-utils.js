@@ -18,3 +18,13 @@ export function trailingSlashRedirect(pathname, search) {
   const target = pathname.replace(/\/+$/, "").replace(/^[/\\]+/, "/");
   return target + search;
 }
+
+/**
+ * A Node request target as a URL. Origin-form targets ("/x") are joined, not
+ * resolved, so "//host/x" stays a path; absolute-form ones ("http://h/x",
+ * as proxies send) are parsed as they are.
+ */
+export function parseRequestTarget(target, host = "localhost") {
+  const raw = target || "/";
+  return /^https?:\/\//i.test(raw) ? new URL(raw) : new URL(`http://${host}${raw}`);
+}

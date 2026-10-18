@@ -81,3 +81,68 @@ test("a route carries its layout chain and the not-found files along it", () => 
   assert.deepEqual(slugLevel.paramNames, ["slug"]);
   assert.deepEqual(blog.levels[0].paramNames, []);
 });
+
+test("parallel @slots: each route gets the slot page for its URL, else the slot's default", () => {
+  const dir = makeApp([
+    "layout.tsx",
+    "dash/layout.tsx",
+    "dash/page.tsx",
+    "dash/default.tsx",
+    "dash/settings/page.tsx",
+    "dash/@team/page.tsx",
+    "dash/@team/default.tsx",
+    "dash/@team/layout.tsx",
+    "dash/@team/members/page.tsx",
+    "dash/@stats/page.tsx",
+  ]);
+  const { routes } = scanAppDir(dir);
+  const at = (p) => matchAppRoute(routes, p).route;
+  const slotsOf = (r) =>
+    Object.fromEntries(
+      Object.entries(r.slots).map(([i, list]) => [i, list.map((s) => `${s.name}:${path.relative(dir, s.file)}`)]),
+    );
+
+  assert.deepEqual(slotsOf(at("/dash")), {
+    1: [`stats:${path.join("dash", "@stats", "page.tsx")}`, `team:${path.join("dash", "@team", "page.tsx")}`],
+  });
+  // No @stats default and no settings page in either slot: team falls back to default, stats to nothing.
+  assert.deepEqual(slotsOf(at("/dash/settings")), { 1: [`team:${path.join("dash", "@team", "default.tsx")}`] });
+  // A URL only a slot has is a route whose children render the level's default.tsx.
+  const members = at("/dash/members");
+  assert.equal(path.relative(dir, members.file), path.join("dash", "default.tsx"));
+  assert.deepEqual(slotsOf(members), { 1: [`team:${path.join("dash", "@team", "members", "page.tsx")}`] });
+  // The slot's own layout wraps what it renders.
+  const team = members.slots[1][0];
+  assert.deepEqual(team.levels.filter((l) => l.layout).map((l) => path.relative(dir, l.layout)), [path.join("dash", "@team", "layout.tsx")]);
+  // Slot folders are not routes of their own.
+  assert.equal(matchAppRoute(routes, "/dash/team"), null);
+});
+
+test("each level knows its folder name, for useSelectedLayoutSegments", () => {
+  const r = match("/features").route;
+  assert.deepEqual(r.levels.map((l) => l.segment), ["", "(marketing)", "features"]);
+});
+
+test("intercepting folders in a slot cover the URLs they name, from the slot's level", () => {
+  const dir = makeApp([
+    "layout.tsx",
+    "feed/layout.tsx",
+    "feed/page.tsx",
+    "feed/@modal/default.tsx",
+    "feed/@modal/(...)photos/[id]/page.tsx",
+    "feed/@modal/(.)item/[n]/page.tsx",
+    "photos/[id]/page.tsx",
+  ]);
+  const { routes, interceptions } = scanAppDir(dir);
+  const byPattern = Object.fromEntries(interceptions.map((i) => [i.pattern, i]));
+  assert.deepEqual(Object.keys(byPattern).sort(), ["/feed/item/[n]", "/photos/[id]"]);
+  const photo = byPattern["/photos/[id]"];
+  assert.equal(photo.slot, "modal");
+  assert.equal(photo.sourceDir, path.join(dir, "feed"));
+  assert.equal(path.relative(dir, photo.file), path.join("feed", "@modal", "(...)photos", "[id]", "page.tsx"));
+  assert.deepEqual(matchAppRoute(interceptions, "/photos/7").params, { id: "7" });
+  // Intercepting folders are not routes of their own; the real page still is.
+  assert.equal(matchAppRoute(routes, "/photos/7").route.pattern, "/photos/[id]");
+  assert.equal(matchAppRoute(routes, "/feed/item/1"), null);
+  assert.ok(matchAppRoute(routes, "/feed").route.levels.some((l) => l.dir === photo.sourceDir));
+});

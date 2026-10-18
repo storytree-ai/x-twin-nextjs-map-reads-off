@@ -6,13 +6,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { reportRequestError } from "./instrumentation.js";
+import { parseRequestTarget } from "./request-utils.js";
 
 function isInternalRequest(pathname) {
   return pathname.startsWith("/@") || pathname.startsWith("/__vite") || pathname.startsWith("/node_modules/");
 }
 
 // Static metadata files at app/'s root, served as they are.
-const STATIC_METADATA = /^\/(favicon\.ico|(?:icon|apple-icon)\.(?:ico|png|jpe?g|gif|svg))$/;
+const STATIC_METADATA = /^\/(favicon\.ico|(?:icon|apple-icon)\.(?:ico|png|jpe?g|gif|svg)|robots\.txt|sitemap\.xml|manifest\.(?:json|webmanifest))$/;
 const CONTENT_TYPES = {
   ".ico": "image/x-icon",
   ".png": "image/png",
@@ -20,6 +21,10 @@ const CONTENT_TYPES = {
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
+  ".txt": "text/plain",
+  ".xml": "application/xml",
+  ".json": "application/manifest+json",
+  ".webmanifest": "application/manifest+json",
 };
 
 /** Answer /favicon.ico, /icon.png, ... from app/ when the file is there. */
@@ -37,7 +42,7 @@ function serveStaticMetadata(appDir, pathname, res) {
 /** A Web Request for a Node request (the body streamed for non-GET/HEAD). */
 export function toWebRequest(req) {
   const host = req.headers.host || "localhost";
-  const url = new URL(req.originalUrl || req.url || "/", `http://${host}`);
+  const url = parseRequestTarget(req.url, host);
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) {
     if (k.startsWith(":") || v === undefined) continue;
@@ -54,8 +59,8 @@ export function toWebRequest(req) {
 }
 
 /** Stream a Web Response to a Node response, keeping headers already set. */
-export async function sendWebResponse(res, response) {
-  res.statusCode = response.status;
+export async function sendWebResponse(res, response, status) {
+  res.statusCode = status || response.status;
   for (const [k, v] of response.headers) {
     if (k === "set-cookie" || k === "content-length") continue;
     res.setHeader(k, v);
@@ -77,10 +82,12 @@ export async function sendWebResponse(res, response) {
 }
 
 export function createAppDevHandler(server, ctx, entryFile) {
+  // The RSC entry (another module graph) reports the errors it handles itself.
+  globalThis.__VINEXT_REPORT_REQUEST_ERROR__ = (err, req, context) => reportRequestError(ctx, err, req, context);
   return async function vinextApp(req, res, next) {
     let pathname;
     try {
-      pathname = new URL(req.url || "/", "http://localhost").pathname;
+      pathname = parseRequestTarget(req.url).pathname;
     } catch {
       return next();
     }
@@ -89,7 +96,7 @@ export function createAppDevHandler(server, ctx, entryFile) {
     try {
       const entry = await server.environments.rsc.runner.import(entryFile);
       const response = await entry.default(toWebRequest(req));
-      await sendWebResponse(res, response);
+      await sendWebResponse(res, response, req.vinextStatus);
     } catch (err) {
       console.error(err);
       await reportRequestError(ctx, err, req, { routerKind: "App Router", routePath: pathname, routeType: "render" });

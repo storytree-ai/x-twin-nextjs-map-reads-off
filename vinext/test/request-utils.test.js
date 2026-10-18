@@ -25,3 +25,10 @@ test("the trailing-slash redirect never leaves the site", () => {
   assert.equal(trailingSlashRedirect("///evil.com//", ""), "/evil.com");
   assert.equal(trailingSlashRedirect("/\\evil.com/", ""), "/evil.com");
 });
+
+test("request targets parse as paths, absolute-form targets as URLs", async () => {
+  const { parseRequestTarget } = await import("../src/server/request-utils.js");
+  assert.equal(parseRequestTarget("//example.com/").pathname, "//example.com/");
+  assert.equal(parseRequestTarget("/a?b=1").search, "?b=1");
+  assert.equal(parseRequestTarget("http://host:3000/x?y=2").pathname, "/x");
+});

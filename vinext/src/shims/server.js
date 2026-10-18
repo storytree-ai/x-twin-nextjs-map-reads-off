@@ -166,4 +166,9 @@ export function after(task) {
   }, 0);
 }
 
-export async function connection() {}
+/** connection(): the page waits for a request, so it renders dynamically. */
+export async function connection() {
+  const als = globalThis.__VINEXT_SSR_ALS__;
+  const store = als && als.getStore();
+  if (store && store.appRequest) store.appRequest.dynamicUsed = true;
+}

@@ -17,6 +17,7 @@ import {
 import { createPagesDevHandler } from "./server/pages-dev.js";
 import { scanPagesDir, PAGE_EXTENSIONS } from "./routing/pages-routes.js";
 import { transformCjs, CJS_HELPER_ID } from "./plugins/cjs.js";
+import { transformUseCache } from "./plugins/use-cache.js";
 import { ensureInstrumentation } from "./server/instrumentation.js";
 import { createAppDevHandler } from "./server/app-dev.js";
 import { APP_ROUTES_ID, RESOLVED_APP_ROUTES_ID, generateAppRoutesModule } from "./app/routes-module.js";
@@ -161,7 +162,7 @@ export default function vinext(options = {}) {
         server.middlewares.use((req, res, next) => {
           ensureInstrumentation(server, ctx).then(() => next(), next);
         });
-        if (ctx.pagesDir) server.middlewares.use(createPagesDevHandler(server, ctx));
+        if (ctx.pagesDir || ctx.appDir) server.middlewares.use(createPagesDevHandler(server, ctx));
         if (ctx.appDir && server.environments.rsc) {
           server.middlewares.use(createAppDevHandler(server, ctx, APP_ENTRIES.rsc));
         }
@@ -171,6 +172,20 @@ export default function vinext(options = {}) {
           res.end("404: This page could not be found.");
         });
       };
+    },
+  };
+
+  // "use cache" works on plain JS, so it runs after Vite has stripped
+  // TypeScript and JSX (a normal-order plugin).
+  const useCache = {
+    name: "vinext:use-cache",
+    async transform(code, id) {
+      if (!code.includes("use cache") || id[0] === "\0" || id.includes("/node_modules/")) return null;
+      const file = id.split("?")[0];
+      if (!file.startsWith(ctx.root + path.sep) || !/\.(m?[jt]sx?)$/.test(file)) return null;
+      const { parseAst } = await import("vite");
+      const out = transformUseCache(code, parseAst(code), path.relative(ctx.root, file));
+      return out === null ? null : { code: out, map: null };
     },
   };
 
@@ -192,5 +207,5 @@ export default function vinext(options = {}) {
       )
     : [];
 
-  return [reactPlugin, rscPlugin, core];
+  return [reactPlugin, rscPlugin, core, useCache];
 }

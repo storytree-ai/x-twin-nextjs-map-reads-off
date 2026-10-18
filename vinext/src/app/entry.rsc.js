@@ -4,15 +4,24 @@
 // sent as the RSC payload to client navigations (header RSC: 1) or handed
 // to the SSR entry for HTML.
 import { createElement as h, Fragment, Suspense } from "react";
-import { renderToReadableStream } from "@vitejs/plugin-rsc/rsc";
-import { routes, rootLevel } from "virtual:vinext/app-routes";
+import {
+  renderToReadableStream,
+  createTemporaryReferenceSet,
+  decodeReply,
+  decodeAction,
+  decodeFormState,
+  loadServerAction,
+} from "@vitejs/plugin-rsc/rsc";
+import { routes, rootLevel, fileIcons, metadataRoutes, interceptions } from "virtual:vinext/app-routes";
 import { matchRoute } from "../routing/pages-routes.js";
-import { ErrorBoundary, NotFoundBoundary } from "./boundaries.js";
+import { ErrorBoundary, NotFoundBoundary, LayoutSegments } from "./boundaries.js";
 import { httpFallbackStatus, parseRedirectError } from "../shims/navigation-shared.js";
 import { createAppRequestStore, takeSetCookies } from "../shims/headers.js";
 import { NextRequest } from "../shims/server.js";
 import { runWithRequestStore } from "../server/ssr-context.js";
-import { resolveMetadata, renderMetadata } from "./metadata.js";
+import { resolveMetadata, resolveViewport, metadataTags } from "./metadata.js";
+import { metadataRouteResponse } from "./metadata-routes.js";
+import { segmentConfig, pageCacheControl, inStaticParams } from "./segment-config.js";
 
 const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 const FALLBACK_FILES = { 404: "notFound", 403: "forbidden", 401: "unauthorized" };
@@ -22,6 +31,10 @@ const FALLBACK_TEXT = {
   401: "You are not authorized to access this page.",
 };
 const RSC_CONTENT_TYPE = "text/x-component; charset=utf-8";
+// The header a client-side server action call names its action in.
+const ACTION_HEADER = "x-rsc-action";
+// The page a client navigation leaves, for intercepting routes.
+const FROM_HEADER = "x-vinext-from";
 
 /** params as Next.js 15 passes them: a Promise that also has the values. */
 function thenable(value) {
@@ -44,30 +57,79 @@ function pickParams(params, names) {
 
 const isClientReference = (c) => !!c && c.$$typeof === Symbol.for("react.client.reference");
 
+/** The <head> elements for the metadata and viewport of layouts (and the page, when given). */
+async function headElements(mods, params, searchParams, pageMod) {
+  const layouts = mods.map((m) => m.layout);
+  const names = mods.map((m) => m.paramNames);
+  const [md, vp] = await Promise.all([
+    resolveMetadata(layouts, names, params, searchParams, pageMod),
+    resolveViewport(layouts, names, params, searchParams, pageMod),
+  ]);
+  return metadataTags(md, vp, fileIcons).map((t, i) => h(t.tag, { key: `m${i}`, ...t.props }, t.children));
+}
+
 async function load(lazy) {
   return lazy ? await lazy() : null;
 }
+
+const LEVEL_KEYS = ["layout", "template", "notFound", "error", "loading", "globalError", "forbidden", "unauthorized", "default"];
 
 /** Each level's convention modules, loaded in parallel. */
 function loadLevels(levels) {
   return Promise.all(
     levels.map(async (level) => {
-      const [layout, template, notFound, error, loading, globalError, forbidden, unauthorized] = await Promise.all(
-        ["layout", "template", "notFound", "error", "loading", "globalError", "forbidden", "unauthorized"].map((k) =>
-          load(level[k]),
-        ),
-      );
-      return { paramNames: level.paramNames, layout, template, notFound, error, loading, globalError, forbidden, unauthorized };
+      const loaded = await Promise.all(LEVEL_KEYS.map((k) => load(level[k])));
+      const mods = { paramNames: level.paramNames, segment: level.segment };
+      LEVEL_KEYS.forEach((k, i) => (mods[k] = loaded[i]));
+      return mods;
     }),
   );
+}
+
+/** What each level's @slots render, loaded: { [levelIndex]: [{ name, Component, mods }] }. */
+async function loadSlots(slots) {
+  const out = {};
+  await Promise.all(
+    Object.entries(slots || {}).map(async ([i, list]) => {
+      out[i] = await Promise.all(
+        list.map(async (s) => ({ name: s.name, Component: (await s.module()).default, mods: await loadLevels(s.levels) })),
+      );
+    }),
+  );
+  return out;
+}
+
+/** The value useSelectedLayoutSegments reports for a level's folder. */
+function segmentValue(segment, params) {
+  const m = /^\[{1,2}(?:\.\.\.)?([^\]]+)\]{1,2}$/.exec(segment || "");
+  if (!m) return segment || null;
+  const v = params[m[1]];
+  return v === undefined ? null : Array.isArray(v) ? v.join("/") : String(v);
+}
+
+/** The slot elements a level's layout receives as props. */
+function slotProps(slotList, params, props) {
+  const out = {};
+  for (const slot of slotList || []) {
+    let node = slot.Component ? h(slot.Component, props) : null;
+    for (let i = slot.mods.length - 1; i >= 0; i--) {
+      const m = slot.mods[i];
+      if (m.template && m.template.default) node = h(m.template.default, null, node);
+      if (m.layout && m.layout.default) node = h(m.layout.default, { params: thenable(params) }, node);
+    }
+    out[slot.name] = node;
+  }
+  return out;
 }
 
 /**
  * Wrap node in levels[0..upTo]'s layouts, templates and boundaries,
  * innermost first. withBoundaries=false leaves out the boundaries of
- * level upTo itself (a fallback already rendered there).
+ * level upTo itself (a fallback already rendered there). slots are the
+ * loaded @slots per level (their elements become layout props).
  */
-function wrapLevels(node, mods, upTo, params, pathname, { boundariesAtLeaf = true } = {}) {
+function wrapLevels(node, mods, upTo, params, pathname, { boundariesAtLeaf = true, slots = {}, pageProps } = {}) {
+  const segments = mods.map((m) => segmentValue(m.segment, params));
   for (let i = upTo; i >= 0; i--) {
     const m = mods[i];
     const boundaries = i < upTo || boundariesAtLeaf;
@@ -84,8 +146,10 @@ function wrapLevels(node, mods, upTo, params, pathname, { boundariesAtLeaf = tru
       node = h(m.template.default, { key: pathname }, node);
     }
     if (m.layout && m.layout.default) {
-      node = h(m.layout.default, { params: thenable(pickParams(params, m.paramNames)) }, node);
+      const own = { params: thenable(pickParams(params, m.paramNames)) };
+      node = h(m.layout.default, { ...own, ...slotProps(slots[i], params, pageProps || own) }, node);
     }
+    node = h(LayoutSegments, { segments: segments.slice(i + 1).filter((s) => s !== null) }, node);
   }
   if (!mods[0] || !mods[0].layout) node = h("html", null, h("body", null, node));
   if (mods[0] && mods[0].globalError && mods[0].globalError.default) {
@@ -128,27 +192,62 @@ const isSuspenseException = (err) =>
 
 const isNavigationError = (err) => !!(parseRedirectError(err) || httpFallbackStatus(err));
 
+/**
+ * Tell instrumentation's onRequestError about an error while handling the
+ * current request (once per error). routeType is "render" or "route".
+ */
+function reportError(err, routeType) {
+  const store = globalThis.__VINEXT_SSR_ALS__.getStore();
+  const report = globalThis.__VINEXT_REPORT_REQUEST_ERROR__;
+  if (!store || !store.request || typeof report !== "function") return;
+  if (err && typeof err === "object") {
+    if ((store.reported ||= new WeakSet()).has(err)) return;
+    store.reported.add(err);
+  }
+  const { request, routePath } = store;
+  const url = new URL(request.url);
+  report(err, { url: url.pathname + url.search, method: request.method, headers: Object.fromEntries(request.headers) }, {
+    routerKind: "App Router",
+    routePath: routePath || url.pathname,
+    routeType,
+  });
+}
+
 /** The RSC stream for a payload; onNavigationError hears notFound()/redirect() thrown while rendering. */
-function renderRsc(payload, isRsc, onNavigationError) {
+function renderRsc(payload, isRsc, onNavigationError, temporaryReferences) {
   return renderToReadableStream(payload, {
+    temporaryReferences,
     onError(err) {
       if (isNavigationError(err)) {
         if (onNavigationError) onNavigationError(err);
         return err.digest;
       }
+      if (isSuspenseException(err)) return;
+      reportError(err, "render");
       if (err && typeof err === "object" && typeof err.digest === "string") return err.digest;
       if (!isRsc) console.error(err);
     },
   });
 }
 
-async function respond(request, rscStream, status, nav) {
+async function respond(request, rscStream, status, nav, cacheControl = null) {
+  const headers = { vary: "RSC" };
+  if (cacheControl) headers["cache-control"] = cacheControl;
   if (request.headers.get("rsc") === "1") {
-    return new Response(rscStream, { status, headers: { "content-type": RSC_CONTENT_TYPE, vary: "RSC" } });
+    return new Response(rscStream, { status, headers: { ...headers, "content-type": RSC_CONTENT_TYPE } });
   }
   const ssr = await import.meta.viteRsc.loadModule("ssr", "index");
   const html = await ssr.renderHtml(rscStream, nav);
-  return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", vary: "RSC" } });
+  return new Response(html, { status, headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+}
+
+/** Whether dynamicParams=false rules params out (they are not in generateStaticParams). */
+async function outsideStaticParams(segmentMods, params) {
+  for (const mod of segmentMods) {
+    if (!mod || typeof mod.generateStaticParams !== "function") continue;
+    if (!inStaticParams(await mod.generateStaticParams({ params }), params)) return true;
+  }
+  return false;
 }
 
 /** A promise that resolves once stream has been read to its end (or failed). */
@@ -161,45 +260,79 @@ function drained(stream) {
   })();
 }
 
-async function renderPage(request, url, match) {
+/**
+ * A client navigation from a page whose level holds a slot with an
+ * intercepting route for the target URL: that page renders again with the
+ * intercepting page in the slot. Returns { match, intercept } or null.
+ */
+function findInterception(request, url) {
+  const from = request.headers.get(FROM_HEADER);
+  if (request.headers.get("rsc") !== "1" || !from || from === url.pathname) return null;
+  const hit = matchRoute(interceptions, url.pathname);
+  if (!hit) return null;
+  const source = matchRoute(routes, from);
+  if (!source || source.route.kind !== "page") return null;
+  const levelIndex = source.route.levels.findIndex((l) => l.dir === hit.route.sourceDir);
+  if (levelIndex < 0) return null;
+  return {
+    match: { route: source.route, params: { ...source.params, ...hit.params } },
+    intercept: { levelIndex, slot: hit.route.slot, module: hit.route.module, levels: hit.route.levels },
+  };
+}
+
+async function renderPage(request, url, match, { formState, intercept } = {}) {
   const pathname = url.pathname;
   const params = match ? match.params : {};
   const route = match ? match.route : null;
   const levels = route ? route.levels : [rootLevel];
   const mods = await loadLevels(levels);
-  const nav = { pathname, search: url.search.slice(1), params };
+  const nav = { pathname, search: url.search.slice(1), params, formState };
   const searchParams = searchToObject(url.searchParams);
   const isRsc = request.headers.get("rsc") === "1";
   const renderFallback = (status, from, meta) =>
-    respond(request, renderRsc({ tree: fallbackTree(status, mods, from, params, pathname, meta), params }, isRsc), status, nav);
+    respond(
+      request,
+      renderRsc({ tree: fallbackTree(status, mods, from, params, pathname, meta), params, formState }, isRsc),
+      status,
+      nav,
+      pageCacheControl({}, { status }),
+    );
 
   if (!route) {
-    const meta = renderMetadata(await resolveMetadata(mods.map((m) => m.layout), [], params, searchParams));
-    return renderFallback(404, 0, meta);
+    return renderFallback(404, 0, await headElements(mods, params, searchParams));
   }
 
   const pageMod = await route.module();
   const Page = pageMod.default;
+  const segmentMods = [...mods.map((m) => m.layout), pageMod];
+  const config = segmentConfig(segmentMods);
+  const store = globalThis.__VINEXT_SSR_ALS__.getStore().appRequest;
+  const cacheControl = () => pageCacheControl(config, { status: 200, dynamicUsed: store.dynamicUsed });
+  if (!config.dynamicParams && (await outsideStaticParams(segmentMods, params))) {
+    return renderFallback(404, mods.length - 1, await headElements(mods, params, searchParams));
+  }
   const props = { params: thenable(params), searchParams: thenable(searchParams) };
   const leafIndex = mods.length - 1;
   let meta = [];
+  let metadataError = null;
   try {
-    meta = renderMetadata(
-      await resolveMetadata(mods.map((m) => m.layout), mods.map((m) => m.paramNames), params, searchParams, pageMod),
-    );
+    meta = await headElements(mods, params, searchParams, pageMod);
   } catch (err) {
     const redirect = parseRedirectError(err);
     if (redirect) return redirectResponse(redirect);
     const status = httpFallbackStatus(err);
-    if (!status) throw err;
-    return renderFallback(status, leafIndex, meta);
+    if (status) return renderFallback(status, leafIndex, meta);
+    // generateMetadata failed: the page's segment fails with its error, for
+    // the error boundaries around it to catch.
+    metadataError = err;
   }
 
   // The response status waits for the page itself (it runs once, inside
   // the render): a notFound() or redirect() thrown by it or its layouts
   // answers 404 / 307 instead of a streamed boundary. Under a loading.tsx
   // the page streams, as in Next.js.
-  const waitForPage = typeof Page === "function" && !isClientReference(Page) && !mods.some((m) => m.loading);
+  const waitForPage =
+    !metadataError && typeof Page === "function" && !isClientReference(Page) && !mods.some((m) => m.loading);
   let settle = () => {};
   const pageSettled = new Promise((resolve) => (settle = resolve));
   let leaf = null;
@@ -227,12 +360,22 @@ async function renderPage(request, url, match) {
       finish(null);
       return out;
     });
+  } else if (metadataError) {
+    leaf = h(function MetadataError() {
+      throw metadataError;
+    });
   } else if (Page) {
     leaf = h(Page, props);
   }
-  const tree = wrapLevels(h(Fragment, null, ...meta, leaf), mods, leafIndex, params, pathname);
-  const stream = renderRsc({ tree, params }, isRsc, (err) => settle(err));
-  if (!waitForPage) return respond(request, stream, 200, nav);
+  const slots = await loadSlots(route.slots);
+  if (intercept) {
+    const own = (slots[intercept.levelIndex] || []).filter((s) => s.name !== intercept.slot);
+    const Component = (await intercept.module()).default;
+    slots[intercept.levelIndex] = [...own, { name: intercept.slot, Component, mods: await loadLevels(intercept.levels) }];
+  }
+  const tree = wrapLevels(h(Fragment, null, ...meta, leaf), mods, leafIndex, params, pathname, { slots, pageProps: props });
+  const stream = renderRsc({ tree, params, formState }, isRsc, (err) => settle(err));
+  if (!waitForPage) return respond(request, stream, 200, nav, cacheControl());
 
   const [out, watch] = stream.tee();
   const navError = await Promise.race([pageSettled, drained(watch).then(() => null)]);
@@ -242,8 +385,67 @@ async function renderPage(request, url, match) {
     if (redirect) return redirectResponse(redirect);
     return renderFallback(httpFallbackStatus(navError), leafIndex, meta);
   }
-  return respond(request, out, 200, nav);
+  return respond(request, out, 200, nav, cacheControl());
 }
+
+/**
+ * A server action. Called from the browser (ACTION_HEADER names it) it
+ * answers its return value as an RSC payload, with redirect when it called
+ * redirect() and revalidated when it revalidated a path or tag or set a
+ * cookie (the browser then refreshes the page). A <form action={action}>
+ * submitted without JavaScript runs it and renders the page again with its
+ * form state.
+ */
+async function handleAction(request, url, match, store) {
+  const actionId = request.headers.get(ACTION_HEADER);
+  store.phase = "action";
+  if (actionId) {
+    const contentType = request.headers.get("content-type") || "";
+    const body = contentType.startsWith("multipart/form-data") ? await request.formData() : await request.text();
+    const temporaryReferences = createTemporaryReferenceSet();
+    const args = await decodeReply(body, { temporaryReferences });
+    const action = await loadServerAction(actionId);
+    let returnValue = null;
+    let redirect = null;
+    try {
+      returnValue = { ok: true, data: await action.apply(null, args) };
+    } catch (err) {
+      redirect = parseRedirectError(err);
+      if (!redirect) {
+        if (!httpFallbackStatus(err)) console.error(err);
+        returnValue = { ok: false, data: err };
+      }
+    }
+    store.phase = "render";
+    const revalidated = !!store.revalidated || store.setCookies.size > 0;
+    const stream = renderRsc({ returnValue, redirect, revalidated }, true, null, temporaryReferences);
+    return new Response(stream, { headers: { "content-type": RSC_CONTENT_TYPE, vary: "RSC" } });
+  }
+
+  const formData = await request.formData();
+  const action = await decodeAction(formData);
+  store.phase = "render";
+  if (!action) return renderPage(request, url, match);
+  store.phase = "action";
+  let result;
+  try {
+    result = await action();
+  } catch (err) {
+    const redirect = parseRedirectError(err);
+    if (redirect) return new Response(null, { status: 303, headers: { location: redirect.url } });
+    throw err;
+  }
+  const formState = await decodeFormState(result, formData);
+  store.phase = "render";
+  return renderPage(request, url, match, { formState });
+}
+
+const isActionRequest = (request) => {
+  if (request.method !== "POST") return false;
+  if (request.headers.get(ACTION_HEADER)) return true;
+  const type = request.headers.get("content-type") || "";
+  return type.startsWith("multipart/form-data") || type.startsWith("application/x-www-form-urlencoded");
+};
 
 // Reading the request (its headers, URL, cookies or body) makes a route
 // handler dynamic, as headers() and cookies() do: it is not cacheable.
@@ -283,6 +485,7 @@ async function handleRoute(request, match, store) {
     const status = httpFallbackStatus(err);
     if (status) return new Response(null, { status });
     console.error(err);
+    reportError(err, "route");
     return new Response(null, { status: 500 });
   }
   if (!(response instanceof Response)) {
@@ -316,10 +519,25 @@ export default function handler(request) {
   return runWithRequestStore(async () => {
     const store = globalThis.__VINEXT_SSR_ALS__.getStore();
     store.appRequest = createAppRequestStore(request.headers);
+    store.request = request;
     const url = new URL(request.url);
+    const metadataRoute = metadataRoutes.find((r) => r.path === url.pathname);
+    if (metadataRoute) return metadataRouteResponse(metadataRoute.type, await metadataRoute.module());
     const match = matchRoute(routes, url.pathname);
-    const response =
-      match && match.route.kind === "route" ? await handleRoute(request, match, store.appRequest) : await renderPage(request, url, match);
+    if (match) store.routePath = match.route.pattern;
+    let response;
+    if (match && match.route.kind === "route") {
+      store.appRequest.phase = "route";
+      response = await handleRoute(request, match, store.appRequest);
+    } else if (isActionRequest(request)) {
+      response = await handleAction(request, url, match, store.appRequest);
+    } else {
+      store.appRequest.phase = "render";
+      const interception = findInterception(request, url);
+      response = interception
+        ? await renderPage(request, url, interception.match, { intercept: interception.intercept })
+        : await renderPage(request, url, match);
+    }
     return withCookies(response, takeSetCookies(store.appRequest));
   });
 }

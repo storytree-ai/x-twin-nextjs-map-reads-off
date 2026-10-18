@@ -151,4 +151,41 @@ header cache-control | grep -q "s-maxage" && fail "route handler reading the req
 curl -s -H "RSC: 1" -D "$WORK/headers.txt" -o "$WORK/body.html" "http://localhost:$PORT/about"
 header content-type | grep -q "text/x-component" || fail "RSC request did not answer an RSC payload"
 
+# Server actions (the no-JS form path), metadata, segment config, parallel
+# routes, middleware rewrites into app routes, error boundaries, "use cache".
+fetch /nextjs-compat/action-cookie-phase >/dev/null
+ACTION_FIELD="$(grep -oE 'name="\$ACTION_ID_[^"]*"' "$WORK/body.html" | head -n1 | sed 's/^name="//; s/"$//')"
+[ -n "$ACTION_FIELD" ] || fail "form with a server action has no \$ACTION_ID_ field"
+curl -s -o /dev/null -D "$WORK/headers.txt" -F "$ACTION_FIELD=" "http://localhost:$PORT/nextjs-compat/action-cookie-phase"
+grep -qi "^set-cookie: action-cookie=from-action" "$WORK/headers.txt" || fail "server action did not set its cookie"
+
+fetch /metadata-test >/dev/null
+grep -q '<meta property="og:title" content="OG Title"/>' "$WORK/body.html" || fail "metadata openGraph was not rendered"
+grep -q '<meta name="theme-color" content="#0070f3"/>' "$WORK/body.html" || fail "viewport themeColor was not rendered"
+[ "$(fetch /robots.txt)" = "200" ] && grep -q "User-Agent: \*" "$WORK/body.html" || fail "app/robots.ts was not served"
+
+headers /isr-test
+header cache-control | grep -q "s-maxage=1, stale-while-revalidate" || fail "revalidate page Cache-Control is wrong"
+headers /dynamic-test
+header cache-control | grep -q "no-store" || fail "force-dynamic page is not no-store"
+[ "$(fetch /products/999)" = "404" ] || fail "dynamicParams=false did not 404 an unknown param"
+
+fetch /dashboard >/dev/null
+grep -q 'data-testid="team-slot"' "$WORK/body.html" || fail "parallel @team slot did not render"
+fetch /dashboard/settings >/dev/null
+grep -q 'data-testid="team-default"' "$WORK/body.html" || fail "parallel slot default.tsx did not render"
+
+curl -s -H "RSC: 1" -H "x-vinext-from: /feed" -o "$WORK/body.html" "http://localhost:$PORT/photos/1"
+grep -q "photo-modal" "$WORK/body.html" && grep -q "feed-page" "$WORK/body.html" || fail "navigating from /feed did not intercept /photos/1"
+curl -s -H "RSC: 1" -o "$WORK/body.html" "http://localhost:$PORT/photos/1"
+grep -q "photo-page" "$WORK/body.html" || fail "/photos/1 without interception did not render the full page"
+
+[ "$(fetch /middleware-rewrite)" = "200" ] && grep -q "Welcome to App Router" "$WORK/body.html" || fail "middleware rewrite did not reach the app route"
+[ "$(fetch /error-server-test)" = "200" ] || fail "a server component error under error.tsx did not answer 200"
+
+fetch /use-cache-fn-test >/dev/null
+first="$(grep -oE 'data-testid="data-value">[0-9]+' "$WORK/body.html")"
+fetch /use-cache-fn-test >/dev/null
+[ -n "$first" ] && [ "$first" = "$(grep -oE 'data-testid="data-value">[0-9]+' "$WORK/body.html")" ] || fail "\"use cache\" function was not cached"
+
 echo "=== checks passed ==="

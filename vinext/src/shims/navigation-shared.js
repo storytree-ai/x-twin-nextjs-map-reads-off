@@ -34,7 +34,14 @@ function navError(digest, message) {
   return err;
 }
 
-export function redirect(url, type = "replace") {
+// Inside a server action redirect() pushes a history entry, elsewhere it replaces.
+function defaultRedirectType() {
+  const als = globalThis.__VINEXT_SSR_ALS__;
+  const store = als && als.getStore();
+  return store && store.appRequest && store.appRequest.phase === "action" ? "push" : "replace";
+}
+
+export function redirect(url, type = defaultRedirectType()) {
   throw navError(`NEXT_REDIRECT;${type};${url};307;`, "NEXT_REDIRECT");
 }
 

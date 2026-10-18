@@ -40,7 +40,7 @@ const FRAMING = new Set(["content-length", "transfer-encoding", "connection", "c
 /**
  * What the middleware answered:
  *   { type: "next", headers, requestHeaders }      carry on (headers go on the response)
- *   { type: "rewrite", url, headers, requestHeaders }  serve url instead
+ *   { type: "rewrite", url, headers, requestHeaders, status }  serve url instead (with status, when set)
  *   { type: "response", response }                 send this response as it is
  * requestHeaders (an object) replaces the request's headers when set.
  */
@@ -65,7 +65,10 @@ export function interpretMiddlewareResponse(response, requestUrl) {
     headers.push([k, v]);
   }
   for (const c of h.getSetCookie()) headers.push(["set-cookie", c]);
-  if (rewrite) return { type: "rewrite", url: new URL(rewrite, requestUrl), headers, requestHeaders };
+  if (rewrite) {
+    const status = response.status !== 200 ? response.status : null;
+    return { type: "rewrite", url: new URL(rewrite, requestUrl), headers, requestHeaders, status };
+  }
   return { type: "next", headers, requestHeaders };
 }
 
