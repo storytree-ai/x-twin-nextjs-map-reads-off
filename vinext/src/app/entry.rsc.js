@@ -12,14 +12,15 @@ import {
   decodeFormState,
   loadServerAction,
 } from "@vitejs/plugin-rsc/rsc";
-import { routes, rootLevel } from "virtual:vinext/app-routes";
+import { routes, rootLevel, fileIcons, metadataRoutes } from "virtual:vinext/app-routes";
 import { matchRoute } from "../routing/pages-routes.js";
 import { ErrorBoundary, NotFoundBoundary } from "./boundaries.js";
 import { httpFallbackStatus, parseRedirectError } from "../shims/navigation-shared.js";
 import { createAppRequestStore, takeSetCookies } from "../shims/headers.js";
 import { NextRequest } from "../shims/server.js";
 import { runWithRequestStore } from "../server/ssr-context.js";
-import { resolveMetadata, renderMetadata } from "./metadata.js";
+import { resolveMetadata, resolveViewport, metadataTags } from "./metadata.js";
+import { metadataRouteResponse } from "./metadata-routes.js";
 
 const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 const FALLBACK_FILES = { 404: "notFound", 403: "forbidden", 401: "unauthorized" };
@@ -52,6 +53,17 @@ function pickParams(params, names) {
 }
 
 const isClientReference = (c) => !!c && c.$$typeof === Symbol.for("react.client.reference");
+
+/** The <head> elements for the metadata and viewport of layouts (and the page, when given). */
+async function headElements(mods, params, searchParams, pageMod) {
+  const layouts = mods.map((m) => m.layout);
+  const names = mods.map((m) => m.paramNames);
+  const [md, vp] = await Promise.all([
+    resolveMetadata(layouts, names, params, searchParams, pageMod),
+    resolveViewport(layouts, names, params, searchParams, pageMod),
+  ]);
+  return metadataTags(md, vp, fileIcons).map((t, i) => h(t.tag, { key: `m${i}`, ...t.props }, t.children));
+}
 
 async function load(lazy) {
   return lazy ? await lazy() : null;
@@ -184,8 +196,7 @@ async function renderPage(request, url, match, { formState } = {}) {
     respond(request, renderRsc({ tree: fallbackTree(status, mods, from, params, pathname, meta), params, formState }, isRsc), status, nav);
 
   if (!route) {
-    const meta = renderMetadata(await resolveMetadata(mods.map((m) => m.layout), [], params, searchParams));
-    return renderFallback(404, 0, meta);
+    return renderFallback(404, 0, await headElements(mods, params, searchParams));
   }
 
   const pageMod = await route.module();
@@ -194,9 +205,7 @@ async function renderPage(request, url, match, { formState } = {}) {
   const leafIndex = mods.length - 1;
   let meta = [];
   try {
-    meta = renderMetadata(
-      await resolveMetadata(mods.map((m) => m.layout), mods.map((m) => m.paramNames), params, searchParams, pageMod),
-    );
+    meta = await headElements(mods, params, searchParams, pageMod);
   } catch (err) {
     const redirect = parseRedirectError(err);
     if (redirect) return redirectResponse(redirect);
@@ -386,6 +395,8 @@ export default function handler(request) {
     const store = globalThis.__VINEXT_SSR_ALS__.getStore();
     store.appRequest = createAppRequestStore(request.headers);
     const url = new URL(request.url);
+    const metadataRoute = metadataRoutes.find((r) => r.path === url.pathname);
+    if (metadataRoute) return metadataRouteResponse(metadataRoute.type, await metadataRoute.module());
     const match = matchRoute(routes, url.pathname);
     let response;
     if (match && match.route.kind === "route") {

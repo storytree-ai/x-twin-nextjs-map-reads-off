@@ -12,7 +12,7 @@ function isInternalRequest(pathname) {
 }
 
 // Static metadata files at app/'s root, served as they are.
-const STATIC_METADATA = /^\/(favicon\.ico|(?:icon|apple-icon)\.(?:ico|png|jpe?g|gif|svg))$/;
+const STATIC_METADATA = /^\/(favicon\.ico|(?:icon|apple-icon)\.(?:ico|png|jpe?g|gif|svg)|robots\.txt|sitemap\.xml|manifest\.(?:json|webmanifest))$/;
 const CONTENT_TYPES = {
   ".ico": "image/x-icon",
   ".png": "image/png",
@@ -20,6 +20,10 @@ const CONTENT_TYPES = {
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
+  ".txt": "text/plain",
+  ".xml": "application/xml",
+  ".json": "application/manifest+json",
+  ".webmanifest": "application/manifest+json",
 };
 
 /** Answer /favicon.ico, /icon.png, ... from app/ when the file is there. */

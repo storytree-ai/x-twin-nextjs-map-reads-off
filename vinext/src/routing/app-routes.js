@@ -80,3 +80,64 @@ export function scanAppDir(appDir) {
 export function matchAppRoute(routes, pathname) {
   return matchRoute(routes, pathname);
 }
+
+const ICON_FILES = [
+  { base: "favicon", exts: [".ico"], rel: "icon" },
+  { base: "icon", exts: [".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg"], rel: "icon" },
+  { base: "apple-icon", exts: [".png", ".jpg", ".jpeg"], rel: "apple-touch-icon" },
+];
+const ICON_TYPES = {
+  ".ico": "image/x-icon",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+};
+
+/** "WxH" of a .ico / .png / .gif file from its header, or null. */
+export function imageSize(buf, ext) {
+  try {
+    if (ext === ".ico" && buf.length >= 8) return `${buf[6] || 256}x${buf[7] || 256}`;
+    if (ext === ".png" && buf.length >= 24) return `${buf.readUInt32BE(16)}x${buf.readUInt32BE(20)}`;
+    if (ext === ".gif" && buf.length >= 10) return `${buf.readUInt16LE(6)}x${buf.readUInt16LE(8)}`;
+  } catch {}
+  return ext === ".svg" ? "any" : null;
+}
+
+/** Metadata routes at app/'s root, by URL: robots.txt, sitemap.xml, manifest. */
+const METADATA_ROUTES = [
+  { base: "robots", path: "/robots.txt", type: "robots" },
+  { base: "sitemap", path: "/sitemap.xml", type: "sitemap" },
+  { base: "manifest", path: "/manifest.webmanifest", type: "manifest" },
+];
+
+/**
+ * app/'s root metadata files: the <link> props its static icon files add to
+ * every page, and its robots/sitemap/manifest modules.
+ */
+export function scanMetadataFiles(appDir) {
+  let files;
+  try {
+    files = new Set(fs.readdirSync(appDir));
+  } catch {
+    return { icons: [], routes: [] };
+  }
+  const icons = [];
+  for (const { base, exts, rel } of ICON_FILES) {
+    for (const ext of exts) {
+      if (!files.has(base + ext)) continue;
+      const props = { rel, href: `/${base}${ext}`, type: ICON_TYPES[ext] };
+      const sizes = imageSize(fs.readFileSync(path.join(appDir, base + ext)), ext);
+      if (sizes) props.sizes = sizes;
+      icons.push(props);
+      break;
+    }
+  }
+  const routes = [];
+  for (const r of METADATA_ROUTES) {
+    const f = findFile(files, r.base);
+    if (f) routes.push({ path: r.path, type: r.type, file: path.join(appDir, f) });
+  }
+  return { icons, routes };
+}

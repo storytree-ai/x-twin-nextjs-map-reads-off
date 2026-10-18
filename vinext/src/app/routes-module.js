@@ -1,7 +1,7 @@
 // virtual:vinext/app-routes: the app/ route table as a module for the RSC
 // entry, each convention file a lazy import() so only the matched route's
 // modules load.
-import { scanAppDir } from "../routing/app-routes.js";
+import { scanAppDir, scanMetadataFiles } from "../routing/app-routes.js";
 
 export const APP_ROUTES_ID = "virtual:vinext/app-routes";
 export const RESOLVED_APP_ROUTES_ID = "\0" + APP_ROUTES_ID;
@@ -24,5 +24,11 @@ export function generateAppRoutesModule(appDir) {
       `levels: [${r.levels.map(levelCode).join(", ")}] }`,
   );
   const rootCode = root ? levelCode(root) : "{ paramNames: [] }";
-  return `export const routes = [\n${routeCode.join(",\n")}\n];\nexport const rootLevel = ${rootCode};\n`;
+  const meta = scanMetadataFiles(appDir);
+  const metaRoutes = meta.routes.map((r) => `  { path: ${JSON.stringify(r.path)}, type: ${JSON.stringify(r.type)}, module: ${lazy(r.file)} }`);
+  return (
+    `export const routes = [\n${routeCode.join(",\n")}\n];\nexport const rootLevel = ${rootCode};\n` +
+    `export const fileIcons = ${JSON.stringify(meta.icons)};\n` +
+    `export const metadataRoutes = [\n${metaRoutes.join(",\n")}\n];\n`
+  );
 }
