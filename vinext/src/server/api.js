@@ -78,7 +78,7 @@ function enhanceResponse(res) {
   return res;
 }
 
-export async function handleApiRoute(server, match, req, res, url) {
+export async function handleApiRoute(server, match, req, res, query) {
   const mod = await server.ssrLoadModule(match.route.file);
   const handler = mod.default;
   if (typeof handler !== "function") {
@@ -86,7 +86,7 @@ export async function handleApiRoute(server, match, req, res, url) {
     res.end(`API route ${match.route.pattern} has no default export handler`);
     return;
   }
-  req.query = { ...searchToQuery(url.searchParams), ...match.params };
+  req.query = query;
   req.cookies = parseCookies(req.headers.cookie);
   const bodyParser = mod.config && mod.config.api && mod.config.api.bodyParser;
   if (bodyParser !== false) {

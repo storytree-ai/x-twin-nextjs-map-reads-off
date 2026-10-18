@@ -74,4 +74,30 @@ grep -q '"name":"User 42"' "$WORK/body.html" || fail "API route did not answer J
 
 [ "$(fetch /does-not-exist)" = "404" ] || fail "unknown route did not answer 404"
 
+# Client navigation data, ISR, middleware and next.config rules.
+headers() { curl -s -o "$WORK/body.html" -D "$WORK/headers.txt" "http://localhost:$PORT$1" >/dev/null || true; }
+header() { grep -i "^$1:" "$WORK/headers.txt" | head -n1 | cut -d' ' -f2- | tr -d '\r'; }
+
+headers /_next/data/development/posts/7.json
+grep -q '"page":"/posts/\[id\]"' "$WORK/body.html" || fail "data route did not answer the page as JSON"
+grep -q '"id":"7"' "$WORK/body.html" || fail "data route did not carry GSSP props"
+
+headers /isr-test
+[ -n "$(header x-vinext-cache)" ] || fail "ISR page has no X-Vinext-Cache"
+header cache-control | grep -q "s-maxage=1, stale-while-revalidate" || fail "ISR page Cache-Control is wrong"
+headers /isr-test
+[ "$(header x-vinext-cache)" = "HIT" ] || fail "second ISR request was not a HIT"
+
+headers /about
+[ "$(header x-custom-middleware)" = "active" ] || fail "middleware header missing on /about"
+[ "$(fetch /blocked)" = "403" ] || fail "middleware did not block /blocked"
+headers /old-page
+header location | grep -q "/about" || fail "middleware did not redirect /old-page"
+[ "$(fetch /rewritten)" = "200" ] && grep -q "Hello from getServerSideProps" "$WORK/body.html" || fail "middleware rewrite did not serve /ssr"
+headers /old-about
+header location | grep -q "^/about" || fail "next.config redirect missing"
+[ "$(fetch /after-rewrite)" = "200" ] && grep -q "<h1>About</h1>" "$WORK/body.html" || fail "next.config afterFiles rewrite missing"
+[ "$(fetch /cjs/basic)" = "200" ] && grep -q "Random: <!-- -->4" "$WORK/body.html" || fail "CommonJS page did not render"
+grep -q 'data-testid="app-wrapper"' "$WORK/body.html" || fail "pages/_app did not wrap the page"
+
 echo "=== checks passed ==="

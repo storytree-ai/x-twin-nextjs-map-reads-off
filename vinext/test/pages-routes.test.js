@@ -51,3 +51,18 @@ test("unknown paths do not match and params are decoded", () => {
   assert.deepEqual(matchRoute(routes(), "/posts/a%20b").params, { id: "a b" });
   assert.equal(matchRoute(routes(), "/").route.pattern, "/");
 });
+
+test("scanPagesDir names _app, _document and 404 as special files", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { scanPagesDir } = await import("../src/routing/pages-routes.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-"));
+  for (const f of ["_app.tsx", "_document.tsx", "404.tsx", "index.tsx"]) fs.writeFileSync(path.join(dir, f), "");
+  const scan = scanPagesDir(dir);
+  assert.equal(scan.special.app, path.join(dir, "_app.tsx"));
+  assert.equal(scan.special.document, path.join(dir, "_document.tsx"));
+  assert.equal(scan.special["404"], path.join(dir, "404.tsx"));
+  assert.deepEqual(scan.pages.map((r) => r.pattern), ["/", "/404"]);
+  fs.rmSync(dir, { recursive: true });
+});

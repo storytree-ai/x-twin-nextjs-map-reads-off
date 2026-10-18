@@ -10,7 +10,8 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./unified-request-context": "./dist/shims/request-context.js"
   },
   "bin": {
     "vinext": "./dist/cli.js"

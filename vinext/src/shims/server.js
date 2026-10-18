@@ -1,5 +1,5 @@
 // next/server: NextRequest / NextResponse over the Fetch API, plus after()
-// and connection(). Middleware execution arrives in a later increment.
+// and connection(). The dev server runs middleware (server/middleware.js).
 class RequestCookies {
   constructor(headers) {
     this._headers = headers;
@@ -72,11 +72,33 @@ class ResponseCookies {
   }
 }
 
+/**
+ * NextResponse.next({ request: { headers } }) replaces the request headers
+ * the page sees: the list goes in x-middleware-override-headers, each value
+ * in x-middleware-request-<name>, as in Next.js.
+ */
+function overrideRequestHeaders(responseHeaders, request) {
+  if (!request || !request.headers) return;
+  const headers = new Headers(request.headers);
+  const names = [];
+  for (const [name, value] of headers) {
+    names.push(name);
+    responseHeaders.set(`x-middleware-request-${name}`, value);
+  }
+  responseHeaders.set("x-middleware-override-headers", names.join(","));
+}
+
+export class NextURL extends URL {
+  clone() {
+    return new NextURL(this.href);
+  }
+}
+
 export class NextRequest extends Request {
   constructor(input, init) {
     super(input, init);
     this._cookies = new RequestCookies(this.headers);
-    this._nextUrl = new URL(this.url);
+    this._nextUrl = new NextURL(this.url);
   }
   get nextUrl() {
     return this._nextUrl;
@@ -107,11 +129,13 @@ export class NextResponse extends Response {
   static rewrite(destination, init = {}) {
     const headers = new Headers(init.headers);
     headers.set("x-middleware-rewrite", String(destination));
+    overrideRequestHeaders(headers, init.request);
     return new NextResponse(null, { ...init, headers });
   }
   static next(init = {}) {
     const headers = new Headers(init.headers);
     headers.set("x-middleware-next", "1");
+    overrideRequestHeaders(headers, init.request);
     return new NextResponse(null, { ...init, headers });
   }
 }

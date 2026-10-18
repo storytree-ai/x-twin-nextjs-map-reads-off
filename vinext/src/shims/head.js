@@ -45,12 +45,23 @@ export function dedupeHead(elements) {
   return out;
 }
 
+// Per-request head elements when the server renders inside its
+// AsyncLocalStorage (see router-state.js), else the module-level list.
+function headList() {
+  const store = globalThis.__VINEXT_SSR_ALS__ ? globalThis.__VINEXT_SSR_ALS__.getStore() : undefined;
+  if (!store) return ssrHead;
+  if (!store.head) store.head = [];
+  return store.head;
+}
+
 export function resetSSRHead() {
-  ssrHead = [];
+  const store = globalThis.__VINEXT_SSR_ALS__ ? globalThis.__VINEXT_SSR_ALS__.getStore() : undefined;
+  if (store) store.head = [];
+  else ssrHead = [];
 }
 
 export function getSSRHeadElements() {
-  return dedupeHead(ssrHead);
+  return dedupeHead(headList());
 }
 
 /** The server registers react-dom/server's renderToStaticMarkup here. */
@@ -127,7 +138,7 @@ function ClientHead({ children }) {
 
 function Head({ children }) {
   if (isServer) {
-    ssrHead.push(...flatten(children));
+    headList().push(...flatten(children));
     return null;
   }
   return ClientHead({ children });
