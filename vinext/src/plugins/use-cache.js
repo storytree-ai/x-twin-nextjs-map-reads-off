@@ -155,7 +155,8 @@ function inferredName(fn, parent) {
  */
 function readsThis(node) {
   if (node.type === "ThisExpression" || node.type === "Super") return true;
-  if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ClassBody") return false;
+  if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression") return false;
+  if (node.type === "ClassBody") return node.body.some((m) => m.computed && readsThis(m.key)); // its members have their own
   if (node.type === "CallExpression" && node.callee.type === "Identifier" && /^_?jsxDEV$/.test(node.callee.name)) {
     return [node.callee, ...node.arguments].some((c, i) => !(i === 6 && c.type === "ThisExpression") && readsThis(c));
   }

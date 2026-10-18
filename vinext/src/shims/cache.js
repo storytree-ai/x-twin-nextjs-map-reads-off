@@ -95,6 +95,7 @@ export function __vinext_cacheRef(id, fn, closure, name) {
 }
 
 class Unserializable extends Error {}
+class Temporary extends Error {}
 const SERVER_REFERENCE = Symbol.for("react.server.reference");
 const CLIENT_REFERENCE = Symbol.for("react.client.reference");
 const ELEMENTS = new Set([Symbol.for("react.transitional.element"), Symbol.for("react.element")]);
@@ -107,16 +108,18 @@ const ELEMENTS = new Set([Symbol.for("react.transitional.element"), Symbol.for("
 // An object met again (round a cycle, or shared) keys as where it was first
 // met, as React writes a reference to it. settled holds the promises met so
 // far by what they came to; the ones not yet settled are pushed onto pending
-// (and key as null for now). With temporary set (for arguments), functions
-// and class instances key by identity: Next.js passes them through as
-// temporary references, which vinext does not swap back into a cached result.
+// (and key as null for now). With temporary set (for arguments), a function
+// or class instance makes the call unkeyable: Next.js passes them through as
+// temporary references, unkeyed, which vinext does not swap back into a
+// cached result (and keying them by identity would grow the cache with every
+// request that makes a new one).
 function boundReplacer(settled, pending, temporary = false) {
   const keying = new Set(); // the cached functions whose closed-over values are being keyed
   const paths = new Map(); // the objects met so far (and what they key as) by where they were met
   let roots = 0;
   function boundValue(key, value) {
     const raw = this[key];
-    if (raw && typeof raw === "object") {
+    if (raw && typeof raw === "object" && !(raw instanceof Date)) { // React writes a Date by value
       if (paths.has(raw)) return { $ref: paths.get(raw) };
       const path = `${paths.has(this) ? paths.get(this) : `#${roots++}`}/${key}`;
       const out = keyed.call(this, key, value);
@@ -156,7 +159,7 @@ function boundReplacer(settled, pending, temporary = false) {
           keying.delete(value);
         }
       }
-      if (temporary) return { $temporary: identity(value) };
+      if (temporary) throw new Temporary();
       throw new Unserializable(
         'Functions cannot be passed directly to Server Functions unless you explicitly expose it by marking it with "use server".',
       );
@@ -176,7 +179,7 @@ function boundReplacer(settled, pending, temporary = false) {
     }
     if (value instanceof Error) return { $error: value.name, message: value.message };
     if (Object.getPrototypeOf(value) !== Object.prototype) {
-      if (temporary) return { $temporary: identity(value) };
+      if (temporary) throw new Temporary();
       throw new Unserializable(
         "Only plain objects, and a few built-ins, can be passed to Server Functions. Classes or null prototypes are not supported.",
       );
@@ -189,17 +192,14 @@ function boundReplacer(settled, pending, temporary = false) {
 // they are made once per module, so a type keys alike across requests.
 const typeIds = new WeakMap();
 let nextTypeId = 0;
-const identity = (value) => {
-  if (!typeIds.has(value)) typeIds.set(value, nextTypeId++);
-  return typeIds.get(value);
-};
 
 /** An element's type: a tag, a client reference's id, or a component by identity. */
 function elementType(type) {
   if (typeof type === "string") return type;
   if (!type || (typeof type !== "object" && typeof type !== "function")) return String(type);
   if (type.$$id) return type.$$id;
-  return `${type.displayName || type.name || ""}#${identity(type)}`;
+  if (!typeIds.has(type)) typeIds.set(type, nextTypeId++);
+  return `${type.displayName || type.name || ""}#${typeIds.get(type)}`;
 }
 
 /**
