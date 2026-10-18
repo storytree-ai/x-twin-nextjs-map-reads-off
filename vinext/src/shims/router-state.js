@@ -13,16 +13,40 @@ function emptyState() {
   return { pathname: "/", query: {}, asPath: "/", isFallback: false };
 }
 
+// The dev server renders each request inside an AsyncLocalStorage it keeps
+// on globalThis (server/ssr-context.js), so concurrent renders keep their
+// own router state; ssrState is the fallback outside one.
+function requestStore() {
+  const als = globalThis.__VINEXT_SSR_ALS__;
+  return als ? als.getStore() : undefined;
+}
+
 export function getRouterState() {
-  return (isServer ? ssrState : clientState) || emptyState();
+  if (isServer) {
+    const store = requestStore();
+    return (store && store.router) || ssrState || emptyState();
+  }
+  return clientState || emptyState();
 }
 
 export function setSSRContext(ctx) {
-  ssrState = ctx ? { ...emptyState(), ...ctx } : null;
+  const state = ctx ? { ...emptyState(), ...ctx } : null;
+  const store = requestStore();
+  if (store) store.router = state;
+  else ssrState = state;
 }
 
-export function setClientRouterState(next) {
+/**
+ * Update the browser's router state. { silent: true } skips notifying
+ * subscribers, for a page swap that re-renders the whole tree anyway
+ * (notifyRouterState() catches up memoised readers after it commits).
+ */
+export function setClientRouterState(next, { silent = false } = {}) {
   clientState = { ...emptyState(), ...clientState, ...next };
+  if (!silent) notifyRouterState();
+}
+
+export function notifyRouterState() {
   for (const l of [...listeners]) l();
 }
 

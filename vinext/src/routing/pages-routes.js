@@ -118,7 +118,7 @@ export function scanPagesDir(pagesDir) {
   for (const { rel, abs } of walk(pagesDir, "", [])) {
     const route = fileToRoute(rel, abs);
     if (SPECIAL_PAGES.has(route.pattern)) {
-      special[route.pattern.slice(1)] = abs;
+      special[route.pattern.slice(2)] = abs; // "/_app" → "app"
       continue;
     }
     if (route.pattern === "/404" || route.pattern === "/500") special[route.pattern.slice(1)] = abs;
