@@ -6,6 +6,7 @@ import { scanPagesDir, matchRoute } from "../routing/pages-routes.js";
 import { shimPath } from "../shims/index.js";
 import { PAGES_CLIENT_URL } from "../client/pages-entry.js";
 import { handleApiRoute } from "./api.js";
+import { fillDocument } from "./document-html.js";
 
 const BUILD_ID = "development";
 
@@ -133,10 +134,9 @@ async function renderPage(server, ctx, scan, match, req, res, url, status) {
   }
   const pageProps = (await result.props) || {};
 
-  const [routerShim, headShim, documentShim, appShim, { renderToString, renderToStaticMarkup }] = await Promise.all([
+  const [routerShim, headShim, appShim, { renderToString, renderToStaticMarkup }] = await Promise.all([
     server.ssrLoadModule(shimPath("router.js")),
     server.ssrLoadModule(shimPath("head.js")),
-    server.ssrLoadModule(shimPath("document.js")),
     server.ssrLoadModule(shimPath("app.js")),
     import("react-dom/server"),
   ]);
@@ -175,7 +175,7 @@ async function renderPage(server, ctx, scan, match, req, res, url, status) {
     const docMod = await server.ssrLoadModule(scan.special.document);
     const Document = docMod.default;
     const markup = renderToStaticMarkup(createElement(Document, { __NEXT_DATA__: nextData }));
-    html = "<!DOCTYPE html>" + documentShim.fillDocument(markup, { head: headHtml, main: appHtml, scripts });
+    html = "<!DOCTYPE html>" + fillDocument(markup, { head: headHtml, main: appHtml, scripts });
   } else {
     html =
       `<!DOCTYPE html><html><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width"/>${headHtml}</head>` +

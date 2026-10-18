@@ -1,6 +1,6 @@
 // next/router for the Pages Router. Navigation here is a full page load;
 // client-side transitions replace navigate() in a later increment.
-import { useMemo } from "react";
+import { createElement, useMemo } from "react";
 import {
   createEmitter,
   getRouterState,
@@ -116,7 +116,7 @@ const Router = {
 
 export function withRouter(Component) {
   function WithRouter(props) {
-    return Component({ ...props, router: useRouter() });
+    return createElement(Component, { ...props, router: useRouter() });
   }
   WithRouter.displayName = `withRouter(${Component.displayName || Component.name || "Component"})`;
   return WithRouter;
