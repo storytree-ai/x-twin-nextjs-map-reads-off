@@ -1,0 +1,45 @@
+{
+  "name": "vinext",
+  "version": "0.1.0",
+  "description": "A Vite plugin and CLI that runs Next.js apps (Pages and App routers) on Vite",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "vinext": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs"
+  },
+  "peerDependencies": {
+    "@vitejs/plugin-react": "6.0.1",
+    "@vitejs/plugin-rsc": "0.5.19",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-server-dom-webpack": "19.2.4",
+    "vite": "8.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@vitejs/plugin-react": { "optional": true },
+    "@vitejs/plugin-rsc": { "optional": true },
+    "react": { "optional": true },
+    "react-dom": { "optional": true },
+    "react-server-dom-webpack": { "optional": true },
+    "vite": { "optional": true }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
