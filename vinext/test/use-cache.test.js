@@ -380,12 +380,34 @@ test("a mark at the start of a case goes ahead of an edit at the same offset", (
   assert.match(out, /case 2: __vinext_cacheRef\("v\.js:\d+", get, \(\) => \(\{ u \}\)\); __vinext_cacheRef\("v\.js:\d+", async/);
 });
 
-test("an arrow reading its enclosing function's arguments keys on them", () => {
+test("a 'use cache' function reading arguments is refused, as Next.js refuses it", () => {
   const code = 'function Page() { const get = async () => { "use cache"; return arguments[0]; }; }';
   const read = { type: "MemberExpression", computed: true, object: I("arguments"), property: { type: "Literal" } };
-  const arrow = cachedArrow(code, [{ type: "ReturnStatement", argument: read }]);
-  const page = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([decl("const", "get", arrow)]) };
-  assert.match(transformUseCache(code, { type: "Program", body: [page] }, "g.js"), /return arguments\[0\]; \}, \{ arguments \}\); \}/);
+  const ret = { type: "ReturnStatement", argument: read };
+  const run = (statements, params = []) => {
+    const arrow = cachedArrow(code, statements);
+    arrow.params = params;
+    const page = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([decl("const", "get", arrow)]) };
+    return () => transformUseCache(code, { type: "Program", body: [page] }, "g.js");
+  };
+  const refused = /"use cache" functions cannot use `arguments`/;
+  // An arrow's arguments are its enclosing function's.
+  assert.throws(run([ret]), refused);
+  // So are those of an arrow inside it, or read in a parameter's default.
+  const inner = { type: "ArrowFunctionExpression", params: [], body: read };
+  assert.throws(run([{ type: "ReturnStatement", argument: inner }]), refused);
+  assert.throws(run([], [{ type: "AssignmentPattern", left: I("a"), right: read }]), refused);
+  // A function's own arguments.
+  const fnCode = 'async function get() { "use cache"; return arguments[0]; }';
+  const ast = fnAst(fnCode);
+  ast.body[0].body.body.push(ret);
+  assert.throws(() => transformUseCache(fnCode, ast, "g.js"), refused);
+  // Not a function's inside it, nor a property or key named arguments.
+  const own = { type: "FunctionExpression", params: [], body: block([ret]) };
+  assert.ok(run([{ type: "ReturnStatement", argument: own }])());
+  const prop = { type: "MemberExpression", computed: false, object: I("x"), property: I("arguments") };
+  const obj = { type: "ObjectExpression", properties: [{ type: "Property", key: I("arguments"), computed: false, value: { type: "Literal" } }] };
+  assert.ok(run([{ type: "ReturnStatement", argument: { type: "ArrayExpression", elements: [prop, obj] } }])());
 });
 
 test("arguments key by content as closed-over values do", async () => {
@@ -457,7 +479,7 @@ test("a 'use cache' function reading this is refused, as Next.js refuses it", ()
   const page = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([decl("const", "get", arrow)]) };
   assert.throws(() => transformUseCache(code, { type: "Program", body: [page] }, "t.js"), /"use cache" functions cannot use `this`/);
   thisX.object = { type: "Super" };
-  assert.throws(() => transformUseCache(code, { type: "Program", body: [page] }, "t.js"), /"use cache" functions cannot use `this`/);
+  assert.throws(() => transformUseCache(code, { type: "Program", body: [page] }, "t.js"), /"use cache" functions cannot use `super`/);
   thisX.object = { type: "ThisExpression" };
   // A computed class member key reads the cached function's own this.
   const klass = { type: "ClassExpression", body: { type: "ClassBody", body: [{ type: "MethodDefinition", computed: true, key: thisX, value: { type: "FunctionExpression", params: [], body: block([]) } }] } };
