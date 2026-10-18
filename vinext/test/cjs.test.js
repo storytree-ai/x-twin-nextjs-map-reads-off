@@ -36,3 +36,11 @@ test("require( inside a string or template is text, not an import", () => {
   assert.equal(transformCjs('const help = "use require(\\"lodash\\")";\nexport default help;'), null);
   assert.equal(transformCjs("const t = `require('x')`;\nexport default t;"), null);
 });
+
+test("require( in JSX text is text, not an import", () => {
+  assert.equal(transformCjs('export default () => <p>Use require("lodash") here</p>;'), null);
+  assert.equal(transformCjs('export default () => <p>\n  require("x")\n</p>;'), null);
+  assert.match(transformCjs('const a = cond ? require("a") : null;\nexport default a;'), /__vinext_req_0 from "a"/);
+  assert.match(transformCjs('function f() {\n  return require("b");\n}\nexport default f;'), /__vinext_req_0 from "b"/);
+  assert.match(transformCjs('export default () => <p>{require("c").label}</p>;'), /__vinext_req_0 from "c"/);
+});

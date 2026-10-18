@@ -42,6 +42,18 @@ function textRanges(code) {
 
 const inRanges = (ranges, pos) => ranges.some(([s, e]) => pos >= s && pos < e);
 
+// A require() call is an expression: it follows an operator, opening
+// punctuation or a keyword. After a letter, ">" or "}" it is JSX text.
+const KEYWORDS = new Set(["return", "await", "yield", "case", "void", "in", "of", "else", "do"]);
+function inExpressionPosition(code, offset) {
+  let i = offset - 1;
+  while (i >= 0 && /\s/.test(code[i])) i--;
+  if (i < 0) return true;
+  if ("=(,;{:?[!&|+-*/%^~<".includes(code[i])) return true;
+  const word = /[A-Za-z_$][\w$]*$/.exec(code.slice(Math.max(0, i - 10), i + 1));
+  return !!word && KEYWORDS.has(word[0]);
+}
+
 /** The transformed code, or null when the module has no CommonJS in it. */
 export function transformCjs(code) {
   const comments = textRanges(code);
@@ -49,7 +61,7 @@ export function transformCjs(code) {
   const imports = [];
   const specs = new Map();
   let out = code.replace(requireRe, (m, _q, spec, offset) => {
-    if (inRanges(comments, offset)) return m;
+    if (inRanges(comments, offset) || !inExpressionPosition(code, offset)) return m;
     if (!specs.has(spec)) {
       const name = `__vinext_req_${specs.size}`;
       specs.set(spec, name);
