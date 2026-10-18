@@ -339,3 +339,43 @@ test("a cached function declaration in a class static block is marked where the 
   const out = transformUseCache(code, { type: "Program", body: [page] }, "k.js");
   assert.match(out, new RegExp(`static \\{ __vinext_cacheRef\\("k\\.js:${start}", get, \\(\\) => \\(\\{ u \\}\\)\\); C\\.x = 1;`));
 });
+
+test("a wrapped function expression takes its name from a numeric or private key", () => {
+  const code = 'function P() { const o = { 1: async () => { "use cache"; return 1; } }; }';
+  const arrow = cachedArrow(code, [{ type: "ReturnStatement", argument: { type: "Literal" } }]);
+  arrow.end = arrow.body.end = code.indexOf("} }") + 1;
+  const prop = (key) => ({ type: "Property", kind: "init", computed: false, key, value: arrow });
+  const page = (key) => ({
+    type: "FunctionDeclaration",
+    id: I("P"),
+    params: [],
+    body: block([decl("const", "o", { type: "ObjectExpression", properties: [prop(key)] })]),
+  });
+  assert.match(transformUseCache(code, { type: "Program", body: [page({ type: "Literal", value: 1 })] }, "q.js"), /, null, "1"\)/);
+  const field = { type: "PropertyDefinition", computed: false, key: { type: "PrivateIdentifier", name: "y" }, value: arrow };
+  const cls = { type: "ClassDeclaration", id: I("C"), body: { type: "ClassBody", body: [field] } };
+  const withField = { type: "FunctionDeclaration", id: I("P"), params: [], body: block([cls]) };
+  assert.match(transformUseCache(code, { type: "Program", body: [withField] }, "q.js"), /, null, "#y"\)/);
+});
+
+test("a mark at the start of a case goes ahead of an edit at the same offset", () => {
+  const code = 'function P(u) { switch (u) { case 1: async function get() { "use cache"; return u; } case 2: async () => { "use cache"; return u; }; } }';
+  const start = code.indexOf("async function");
+  const body = { type: "BlockStatement", start: code.indexOf("{", start), end: code.indexOf("} case 2") + 1 };
+  const d = code.indexOf('"use cache";');
+  body.body = [{ type: "ExpressionStatement", directive: "use cache", start: d, end: d + 12 }, { type: "ReturnStatement", argument: I("u") }];
+  const get = { type: "FunctionDeclaration", async: true, id: I("get"), params: [], start, end: body.end, body };
+  const arrow = cachedArrow(code, [{ type: "ReturnStatement", argument: I("u") }]);
+  const stmt = { type: "ExpressionStatement", start: arrow.start, end: arrow.end + 1, expression: arrow };
+  const sw = {
+    type: "SwitchStatement",
+    discriminant: I("u"),
+    cases: [
+      { type: "SwitchCase", test: { type: "Literal" }, consequent: [get] },
+      { type: "SwitchCase", test: { type: "Literal" }, consequent: [stmt] },
+    ],
+  };
+  const page = { type: "FunctionDeclaration", id: I("P"), params: [I("u")], body: block([sw]) };
+  const out = transformUseCache(code, { type: "Program", body: [page] }, "v.js");
+  assert.match(out, /case 2: __vinext_cacheRef\("v\.js:\d+", get, \(\) => \(\{ u \}\)\); __vinext_cacheRef\("v\.js:\d+", async/);
+});

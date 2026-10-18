@@ -133,14 +133,17 @@ function closedOver(fn, outer) {
   return [...out];
 }
 
-/** The name an anonymous function expression takes from the binding or property it is put in. */
+/** The name an anonymous function expression takes from the binding or (non-computed) key it is put in. */
 function inferredName(fn, parent) {
   if (fn.id) return null;
   if (parent.type === "VariableDeclarator" && parent.init === fn && parent.id.type === "Identifier") return parent.id.name;
   if (parent.type === "AssignmentExpression" && parent.right === fn && parent.left.type === "Identifier") return parent.left.name;
   if (parent.type === "AssignmentPattern" && parent.right === fn && parent.left.type === "Identifier") return parent.left.name;
   if ((parent.type === "Property" || parent.type === "PropertyDefinition") && parent.value === fn && !parent.computed) {
-    return parent.key.type === "Identifier" ? parent.key.name : typeof parent.key.value === "string" ? parent.key.value : null;
+    const { key } = parent;
+    if (key.type === "Identifier") return key.name;
+    if (key.type === "PrivateIdentifier") return `#${key.name}`;
+    return typeof key.value === "string" || typeof key.value === "number" ? String(key.value) : null;
   }
   return null;
 }
@@ -172,12 +175,12 @@ function wrapEdits(fn, outer, parent, outerSwitch, id, directive) {
       if (parent.type === "BlockStatement") {
         const directives = parent.body.filter((s) => typeof s.directive === "string");
         const at = directives.length ? directives[directives.length - 1].end : parent.start + 1;
-        edits.push({ at, end: at, text: ` ${text}` });
+        edits.push({ at, end: at, text: ` ${text}`, statement: true });
       } else if (parent.type === "StaticBlock") {
-        edits.push({ at: parent.body[0].start, end: parent.body[0].start, text: `${text} ` });
+        edits.push({ at: parent.body[0].start, end: parent.body[0].start, text: `${text} `, statement: true });
       } else if (parent.type === "SwitchCase" && outerSwitch) {
         for (const c of outerSwitch.cases) {
-          if (c.consequent.length) edits.push({ at: c.consequent[0].start, end: c.consequent[0].start, text: `${text} ` });
+          if (c.consequent.length) edits.push({ at: c.consequent[0].start, end: c.consequent[0].start, text: `${text} `, statement: true });
         }
       } else {
         edits.push({ at: fn.end, end: fn.end, text: ` ${text}` });
@@ -224,7 +227,9 @@ export function transformUseCache(code, ast, file) {
   if (fileLevel) for (const fn of exportedFunctions(ast)) add(fn, [], null, null, null);
   if (!edits.length) return null;
   const marks = edits.some((e) => e.text.includes("__vinext_cacheRef("));
-  edits.sort((a, b) => b.at - a.at);
+  // From the end back; at one offset the edit applied last comes first, so
+  // a mark put ahead of a statement is applied after the statement's own.
+  edits.sort((a, b) => b.at - a.at || !!a.statement - !!b.statement);
   let out = code;
   for (const e of edits) out = out.slice(0, e.at) + e.text + out.slice(e.end);
   return `import { __vinext_useCache${marks ? ", __vinext_cacheRef" : ""} } from "next/cache";${out}`;
