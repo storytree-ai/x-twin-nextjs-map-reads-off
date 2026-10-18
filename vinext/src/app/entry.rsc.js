@@ -243,7 +243,8 @@ function renderRsc(payload, isRsc, onNavigationError, temporaryReferences) {
 }
 
 async function respond(request, rscStream, status, nav, cacheControl = null) {
-  const headers = { vary: "RSC" };
+  // The page a navigation leaves can change the answer (intercepting routes).
+  const headers = { vary: `RSC, ${FROM_HEADER}` };
   if (cacheControl) headers["cache-control"] = cacheControl;
   if (request.headers.get("rsc") === "1") {
     return new Response(rscStream, { status, headers: { ...headers, "content-type": RSC_CONTENT_TYPE } });

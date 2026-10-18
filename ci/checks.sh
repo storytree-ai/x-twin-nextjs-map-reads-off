@@ -175,8 +175,9 @@ grep -q 'data-testid="team-slot"' "$WORK/body.html" || fail "parallel @team slot
 fetch /dashboard/settings >/dev/null
 grep -q 'data-testid="team-default"' "$WORK/body.html" || fail "parallel slot default.tsx did not render"
 
-curl -s -H "RSC: 1" -H "x-vinext-from: /feed" -o "$WORK/body.html" "http://localhost:$PORT/photos/1"
+curl -s -H "RSC: 1" -H "x-vinext-from: /feed" -D "$WORK/headers.txt" -o "$WORK/body.html" "http://localhost:$PORT/photos/1"
 grep -q "photo-modal" "$WORK/body.html" && grep -q "feed-page" "$WORK/body.html" || fail "navigating from /feed did not intercept /photos/1"
+header vary | grep -qi "x-vinext-from" || fail "an intercepted RSC payload does not vary on x-vinext-from"
 curl -s -H "RSC: 1" -o "$WORK/body.html" "http://localhost:$PORT/photos/1"
 grep -q "photo-page" "$WORK/body.html" || fail "/photos/1 without interception did not render the full page"
 
@@ -187,6 +188,10 @@ fetch /use-cache-fn-test >/dev/null
 first="$(grep -oE 'data-testid="data-value">[0-9]+' "$WORK/body.html")"
 fetch /use-cache-fn-test >/dev/null
 [ -n "$first" ] && [ "$first" = "$(grep -oE 'data-testid="data-value">[0-9]+' "$WORK/body.html")" ] || fail "\"use cache\" function was not cached"
+[ "$(fetch /use-cache-test)" = "200" ] || fail "a file-level \"use cache\" page did not answer 200"
+first="$(grep -oE 'data-testid="timestamp">[0-9]+' "$WORK/body.html")"
+fetch /use-cache-test >/dev/null
+[ -n "$first" ] && [ "$first" = "$(grep -oE 'data-testid="timestamp">[0-9]+' "$WORK/body.html")" ] || fail "a file-level \"use cache\" page was not cached"
 
 # next/og: ImageResponse route handlers and app/icon.tsx.
 png_size() { od -An -tu1 -j16 -N8 "$WORK/body.html" | awk '{ printf "%dx%d", ($1*16777216)+($2*65536)+($3*256)+$4, ($5*16777216)+($6*65536)+($7*256)+$8 }'; }

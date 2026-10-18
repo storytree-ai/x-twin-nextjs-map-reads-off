@@ -12,6 +12,7 @@ import {
   setServerCallback,
 } from "@vitejs/plugin-rsc/browser";
 import { AppNavContext } from "../shims/app-nav-context.js";
+import { historyState, navigationSource } from "./nav-from.js";
 
 /** The inline flight chunks (see flight-inline.js) as a byte stream. */
 function readInlineFlight() {
@@ -80,10 +81,10 @@ function AppRouter({ initialPayload }) {
       const target = new URL(href, window.location.href);
       if (target.origin !== window.location.origin) return hardNavigate(target.href);
       const id = ++navId;
+      // The page being left, so the server can apply intercepting routes.
+      const from = navigationSource(mode, target.pathname, window.location.pathname, window.history.state);
       let response;
       try {
-        // The page being left, so the server can apply intercepting routes.
-        const from = mode === "refresh" || mode === "pop" ? target.pathname : window.location.pathname;
         response = await fetch(target.pathname + target.search, { headers: { RSC: "1", "x-vinext-from": from } });
       } catch {
         return hardNavigate(target.href);
@@ -97,7 +98,7 @@ function AppRouter({ initialPayload }) {
       const payload = await createFromFetch(Promise.resolve(response));
       if (id !== navId) return;
       const url = finalUrl.pathname + finalUrl.search;
-      const commit = { id, mode, url: url + target.hash, scroll, hash: target.hash };
+      const commit = { id, mode, url: url + target.hash, scroll, hash: target.hash, from };
       startTransition(() => setState({ payload, url, commit }));
     };
 
@@ -135,8 +136,8 @@ function AppRouter({ initialPayload }) {
     if (!c) return;
     applyingHistory = true;
     try {
-      if (c.mode === "push") window.history.pushState({ __vinext: c.id }, "", c.url);
-      else if (c.mode === "replace") window.history.replaceState({ __vinext: c.id }, "", c.url);
+      if (c.mode === "push") window.history.pushState(historyState(c.id, c.from), "", c.url);
+      else if (c.mode === "replace") window.history.replaceState(historyState(c.id, c.from), "", c.url);
     } finally {
       applyingHistory = false;
     }
