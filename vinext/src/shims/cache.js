@@ -141,11 +141,7 @@ function boundReplacer(settled, pending) {
       );
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-    if (ELEMENTS.has(value.$$typeof)) {
-      const { type } = value;
-      const name = typeof type === "string" ? type : typeof type === "symbol" ? String(type) : type.$$id || type.displayName || type.name;
-      return { $element: name, key: value.key, props: value.props };
-    }
+    if (ELEMENTS.has(value.$$typeof)) return { $element: elementType(value.type), key: value.key, props: value.props };
     if (value instanceof Promise) {
       if (settled.has(value)) return { $promise: settled.get(value) };
       pending.push(value);
@@ -165,6 +161,16 @@ function boundReplacer(settled, pending) {
     }
     return Object.keys(value).some((k) => k[0] === "$") ? { $object: Object.entries(value) } : value;
   };
+}
+
+/** An element's type by name: a tag, a component, or what memo, forwardRef and the like wrap. */
+function elementType(type) {
+  if (typeof type === "string") return type;
+  if (typeof type === "symbol" || !type) return String(type);
+  if (type.$$id || type.displayName || typeof type === "function") return type.$$id || type.displayName || type.name;
+  const inner = type.type || type.render;
+  const kind = typeof type.$$typeof === "symbol" ? Symbol.keyFor(type.$$typeof) : "";
+  return inner ? `${kind}(${elementType(inner)})` : kind;
 }
 
 /**

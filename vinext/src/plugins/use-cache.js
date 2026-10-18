@@ -75,7 +75,7 @@ function lexicalNames(statements, out = new Set()) {
 /** The var names node declares (hoisted to its function; not those of functions nested in it). */
 function varNames(node, out) {
   if (node.type === "VariableDeclaration" && node.kind === "var") for (const d of node.declarations) for (const n of boundNames(d.id)) out.add(n);
-  if (FUNCTION_TYPES.has(node.type)) return out;
+  if (FUNCTION_TYPES.has(node.type) || node.type === "StaticBlock") return out; // their own var scopes
   for (const c of children(node)) varNames(c, out);
   return out;
 }
@@ -89,7 +89,8 @@ function scopeNames(node, parent) {
     if (node.body.type === "BlockStatement") lexicalNames(node.body.body, varNames(node.body, out));
     return out;
   }
-  if (node.type === "BlockStatement" || node.type === "StaticBlock") {
+  if (node.type === "StaticBlock") return lexicalNames(node.body, node.body.reduce((out, c) => varNames(c, out), new Set()));
+  if (node.type === "BlockStatement") {
     return parent && FUNCTION_TYPES.has(parent.type) ? null : lexicalNames(node.body); // a function body is the function's scope
   }
   if (node.type === "SwitchStatement") return lexicalNames(node.cases.flatMap((c) => c.consequent));

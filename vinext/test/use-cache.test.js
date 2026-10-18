@@ -278,3 +278,26 @@ test("a cached function declaration in a switch case is marked at every case", (
   const mark = `__vinext_cacheRef\\("w\\.js:${start}", get, \\(\\) => \\(\\{ u \\}\\)\\); `;
   assert.match(out, new RegExp(`case 1: ${mark}return 1; case 2: ${mark}async function get`));
 });
+
+test("a var in a class static block is the static block's", () => {
+  const code = 'function Page() { class C { static { var v = 1; } } const get = async () => { "use cache"; return v; }; }';
+  const arrow = cachedArrow(code, [{ type: "ReturnStatement", argument: I("v") }]);
+  const cls = { type: "ClassDeclaration", id: I("C"), body: { type: "ClassBody", body: [{ type: "StaticBlock", body: [decl("var", "v")] }] } };
+  const page = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([cls, decl("const", "get", arrow)]) };
+  assert.match(transformUseCache(code, { type: "Program", body: [page] }, "c.js"), /return v; \}\); \}/);
+});
+
+test("closed-over elements of different memo or forwardRef components key apart", async () => {
+  let calls = 0;
+  const run = (el) => __vinext_useCache("t:8", [], async () => ++calls, { el });
+  const element = (type) => ({ $$typeof: Symbol.for("react.transitional.element"), type, key: null, props: {} });
+  const memo = (type) => ({ $$typeof: Symbol.for("react.memo"), type });
+  const forwardRef = (render) => ({ $$typeof: Symbol.for("react.forward_ref"), render });
+  const A = function A() {};
+  const B = function B() {};
+  assert.equal(await run(element(memo(A))), 1);
+  assert.equal(await run(element(memo(A))), 1);
+  assert.equal(await run(element(memo(B))), 2);
+  assert.equal(await run(element(forwardRef(A))), 3);
+  assert.equal(await run(element(forwardRef(B))), 4);
+});
