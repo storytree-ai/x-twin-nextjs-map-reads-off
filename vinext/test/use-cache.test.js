@@ -387,3 +387,75 @@ test("an arrow reading its enclosing function's arguments keys on them", () => {
   const page = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([decl("const", "get", arrow)]) };
   assert.match(transformUseCache(code, { type: "Program", body: [page] }, "g.js"), /return arguments\[0\]; \}, \{ arguments \}\); \}/);
 });
+
+test("arguments key by content as closed-over values do", async () => {
+  let calls = 0;
+  const run = (...args) => __vinext_useCache("t:args", args, async () => ++calls);
+  const first = await run(NaN);
+  assert.equal(await run(NaN), first);
+  assert.notEqual(await run(null), first);
+  const m = await run(new Map([["a", 1]]));
+  assert.equal(await run(new Map([["a", 1]])), m);
+  assert.notEqual(await run(new Map([["a", 2]])), m);
+});
+
+test("a function or class instance argument keys by identity, as Next.js passes it through unkeyed", async () => {
+  let calls = 0;
+  const run = (v) => __vinext_useCache("t:temp", [v], async () => ++calls);
+  const f = () => 1;
+  const first = await run(f);
+  assert.equal(await run(f), first);
+  assert.notEqual(await run(() => 1), first);
+  const c = new (class Clock {})();
+  const clock = await run(c);
+  assert.equal(await run(c), clock);
+  assert.notEqual(await run(new (class Clock {})()), clock);
+  await assert.rejects(run(Symbol("local")), /Only global symbols/);
+});
+
+test("a closed-over value that refers to itself is keyed, as React serializes cycles", async () => {
+  let calls = 0;
+  const run = (v) => __vinext_useCache("t:cycle", [], async () => ++calls, { v });
+  const cyclic = () => {
+    const a = { n: 1 };
+    a.self = a;
+    return a;
+  };
+  const first = await run(cyclic());
+  assert.equal(await run(cyclic()), first);
+  const b = { n: 1, self: { n: 1 } };
+  assert.notEqual(await run(b), first);
+  const shared = { n: 1 };
+  assert.notEqual(await run([shared, shared]), await run([{ n: 1 }, { n: 1 }]));
+});
+
+test("a rejected closed-over promise rejects the call, as encodeReply does", async () => {
+  let calls = 0;
+  const run = (p) => __vinext_useCache("t:reject", [], async () => ++calls, { p });
+  await assert.rejects(run(Promise.reject(new Error("gone"))), /gone/);
+  await assert.rejects(run(Promise.reject(new Error("gone"))), /gone/);
+  assert.equal(calls, 0);
+});
+
+test("a 'use cache' function reading this is refused, as Next.js refuses it", () => {
+  // function Page() { const get = async () => { "use cache"; return this.x; }; }
+  const code = 'function Page() { const get = async () => { "use cache"; return this.x; }; }';
+  const thisX = { type: "MemberExpression", object: { type: "ThisExpression" }, property: I("x"), computed: false };
+  const arrow = cachedArrow(code, [{ type: "ReturnStatement", argument: thisX }]);
+  const page = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([decl("const", "get", arrow)]) };
+  assert.throws(() => transformUseCache(code, { type: "Program", body: [page] }, "t.js"), /"use cache" functions cannot use `this`/);
+  thisX.object = { type: "Super" };
+  assert.throws(() => transformUseCache(code, { type: "Program", body: [page] }, "t.js"), /"use cache" functions cannot use `this`/);
+  thisX.object = { type: "ThisExpression" };
+  // A function inside it has its own this.
+  const own = { type: "FunctionExpression", params: [], body: block([{ type: "ReturnStatement", argument: thisX }]) };
+  const code2 = 'function Page() { const get = async () => { "use cache"; return function () {}; }; }';
+  const arrow2 = cachedArrow(code2, [{ type: "ReturnStatement", argument: own }]);
+  const page2 = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([decl("const", "get", arrow2)]) };
+  assert.ok(transformUseCache(code2, { type: "Program", body: [page2] }, "t.js"));
+  // Nor is the this the dev JSX runtime is handed (the source is checked before JSX is compiled).
+  const jsx = { type: "CallExpression", callee: I("_jsxDEV"), arguments: [I("a"), I("b"), I("c"), I("d"), I("e"), { type: "ThisExpression" }] };
+  const arrow3 = cachedArrow(code2, [{ type: "ReturnStatement", argument: jsx }]);
+  const page3 = { type: "FunctionDeclaration", id: I("Page"), params: [], body: block([decl("const", "get", arrow3)]) };
+  assert.ok(transformUseCache(code2, { type: "Program", body: [page3] }, "t.js"));
+});

@@ -148,6 +148,21 @@ function inferredName(fn, parent) {
   return null;
 }
 
+/**
+ * Whether node reads its function's this or super (not a nested function's
+ * or class's own, nor the this the dev JSX runtime is handed as an
+ * element's source: the code is checked after JSX is compiled).
+ */
+function readsThis(node) {
+  if (node.type === "ThisExpression" || node.type === "Super") return true;
+  if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ClassBody") return false;
+  if (node.type === "CallExpression" && node.callee.type === "Identifier" && /^_?jsxDEV$/.test(node.callee.name)) {
+    return [node.callee, ...node.arguments].some((c, i) => !(i === 6 && c.type === "ThisExpression") && readsThis(c));
+  }
+  for (const c of children(node)) if (readsThis(c)) return true;
+  return false;
+}
+
 const isMethod = (parent) =>
   !!parent && (parent.type === "MethodDefinition" || (parent.type === "Property" && (parent.method || parent.kind !== "init")));
 
@@ -218,6 +233,8 @@ export function transformUseCache(code, ast, file) {
   const add = (fn, outer, parent, outerSwitch, directive) => {
     if (seen.has(fn)) return;
     seen.add(fn);
+    // As Next.js refuses it: the cached result would not depend on this.
+    if (fn.params.some(readsThis) || readsThis(fn.body)) throw new Error(`${file}: "use cache" functions cannot use \`this\`.`);
     edits.push(...wrapEdits(fn, outer, parent, outerSwitch, `${file}:${fn.start}`, directive));
   };
   for (const { fn, outer, parent, outerSwitch } of functions(ast)) {
