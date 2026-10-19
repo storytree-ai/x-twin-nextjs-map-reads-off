@@ -204,4 +204,29 @@ header content-type | grep -q "^image/png" || fail "app/icon.tsx was not served 
 fetch / >/dev/null
 grep -qE '<link rel="icon" href="/icon\?[0-9a-f]+" type="image/png"/>' "$WORK/body.html" || fail "pages do not link app/icon.tsx"
 
+# next/headers without await: exotic headers()/cookies()/draftMode() promises.
+get() { curl -s -o "$WORK/body.html" -D "$WORK/headers.txt" "$@" >/dev/null || true; }
+has() { grep -qF -- "$1" "$WORK/body.html"; }
+READONLY_HEADERS="Headers cannot be modified. Read more: https://nextjs.org/docs/app/api-reference/functions/headers"
+get -H "x-sync-header: sync-value" "http://localhost:$PORT/nextjs-compat/api/request-api-sync"
+has '{"syncHeader":"sync-value","syncCookie":"set-via-sync"}' || fail "request-api-sync route did not read headers()/cookies() without await"
+grep -qi "^set-cookie: sync-session=set-via-sync" "$WORK/headers.txt" || fail "a cookie set without await was not sent"
+get -H "x-repeat: original" "http://localhost:$PORT/nextjs-compat/api/request-api-repeat"
+has "{\"firstHeader\":\"original\",\"secondHeader\":\"original\",\"headerError\":\"$READONLY_HEADERS\",\"repeatCookie\":\"repeat-value\"}" || fail "request-api-repeat route answered $(cat "$WORK/body.html")"
+get -H "x-test-header: original" "http://localhost:$PORT/nextjs-compat/api/headers-readonly"
+has "{\"error\":\"$READONLY_HEADERS\",\"value\":\"original\"}" || fail "headers-readonly route answered $(cat "$WORK/body.html")"
+get -H "x-iterate-a: 1" -H "x-iterate-b: 2" "http://localhost:$PORT/nextjs-compat/api/headers-iterate"
+has '"syncEntries":[["x-iterate-a","1"],["x-iterate-b","2"]],"awaitedEntries":[["x-iterate-a","1"],["x-iterate-b","2"]]' || fail "headers-iterate route answered $(cat "$WORK/body.html")"
+get -H "x-sync-header: page-value" -H "cookie: session=abc" "http://localhost:$PORT/nextjs-compat/request-api-sync"
+has '<p id="sync-header">page-value</p>' && has '<p id="sync-cookie">abc</p>' || fail "request-api-sync page did not read headers()/cookies() without await"
+get -H "x-test-page: original" -H "cookie: session=abc" "http://localhost:$PORT/nextjs-compat/request-api-readonly"
+has "<p id=\"header-error\">$READONLY_HEADERS</p>" || fail "request-api-readonly page did not render the read-only headers error"
+has '<p id="cookie-error">Cookies can only be modified in a Server Action or Route Handler.' || fail "request-api-readonly page did not render the read-only cookies error"
+has '<p id="header-value">original</p>' && has '<p id="cookie-value">abc</p>' || fail "request-api-readonly page changed the request's header or cookie"
+get "http://localhost:$PORT/nextjs-compat/request-api-dynamic-error"
+has '<p id="header-error">Route /nextjs-compat/request-api-dynamic-error with `dynamic = &quot;error&quot;` couldn&#x27;t be rendered statically because it used `headers()`.' || fail "dynamic = error page did not refuse headers()"
+has 'because it used `cookies()`.' || fail "dynamic = error page did not refuse cookies()"
+get "http://localhost:$PORT/nextjs-compat/draft-mode-dynamic-error"
+has '<p id="draft-mode-error">Route /nextjs-compat/draft-mode-dynamic-error with `dynamic = &quot;error&quot;` couldn&#x27;t be rendered statically because it used `draftMode()`.' || fail "dynamic = error page did not refuse draftMode()"
+
 echo "=== checks passed ==="
