@@ -320,6 +320,9 @@ async function renderPage(request, url, match, { formState, intercept } = {}) {
   const segmentMods = [...mods.map((m) => m.layout), pageMod];
   const config = segmentConfig(segmentMods);
   const store = globalThis.__VINEXT_SSR_ALS__.getStore().appRequest;
+  // Under dynamic = "error" the request APIs refuse (shims/headers.js).
+  store.dynamicShouldError = config.dynamic === "error";
+  store.route = route.pattern;
   const cacheControl = () => pageCacheControl(config, { status: 200, dynamicUsed: store.dynamicUsed });
   if (!config.dynamicParams && (await outsideStaticParams(segmentMods, params))) {
     return renderFallback(404, mods.length - 1, await headElements(mods, params, searchParams));
@@ -489,6 +492,8 @@ async function handleRoute(request, match, store) {
     }
     return new Response(null, { status: 405 });
   }
+  store.dynamicShouldError = mod.dynamic === "error";
+  store.route = match.route.pattern;
   let response;
   try {
     response = await fn(trackRequestReads(new NextRequest(request), store), { params: thenable(match.params) });

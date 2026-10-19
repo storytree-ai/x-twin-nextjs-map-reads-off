@@ -45,10 +45,12 @@ export function serializeCookie(c) {
   return s;
 }
 
+const READONLY_HEADERS = "Headers cannot be modified. Read more: https://nextjs.org/docs/app/api-reference/functions/headers";
+
 function readonlyHeaders(source) {
   const h = new Headers(source);
   const deny = () => {
-    throw new Error("Headers cannot be modified here. Read more: https://nextjs.org/docs/app/api-reference/functions/headers");
+    throw new Error(READONLY_HEADERS);
   };
   h.set = deny;
   h.append = deny;
@@ -56,11 +58,36 @@ function readonlyHeaders(source) {
   return h;
 }
 
-export async function headers() {
+const HEADERS_METHODS = ["get", "has", "getSetCookie", "entries", "keys", "values", "forEach", Symbol.iterator, "set", "append", "delete"];
+
+/**
+ * A Promise of headers that is also usable as the headers themselves, as
+ * Next.js's request APIs still are in dev: its methods and iteration read
+ * the awaited object.
+ */
+function exoticHeaders(h) {
+  const promise = Promise.resolve(h);
+  for (const key of HEADERS_METHODS) {
+    Object.defineProperty(promise, key, { value: (...args) => h[key](...args) });
+  }
+  return promise;
+}
+
+/** Under `dynamic = "error"` a request API refuses, as Next.js's StaticGenBailoutError does. */
+function assertDynamicAllowed(store, expression) {
+  if (store && store.dynamicShouldError) {
+    throw new Error(
+      `Route ${store.route} with \`dynamic = "error"\` couldn't be rendered statically because it used \`${expression}\`. See more info here: https://nextjs.org/docs/app/building-your-application/rendering/static-and-dynamic#dynamic-rendering`,
+    );
+  }
+}
+
+export function headers() {
   const store = requestStore();
-  if (!store) return fallbackHeaders;
+  if (!store) return exoticHeaders(fallbackHeaders);
+  assertDynamicAllowed(store, "headers()");
   store.dynamicUsed = true;
-  return (store.readonlyHeaders ??= readonlyHeaders(store.headers));
+  return exoticHeaders((store.readonlyHeaders ??= readonlyHeaders(store.headers)));
 }
 
 const READONLY_COOKIES =
@@ -117,6 +144,7 @@ function syncThenable(value) {
 
 export function cookies() {
   const store = requestStore();
+  assertDynamicAllowed(store, "cookies()");
   if (store) store.dynamicUsed = true;
   return syncThenable(cookieStore(store));
 }
@@ -134,6 +162,7 @@ export function takeSetCookies(store) {
   return out;
 }
 
-export async function draftMode() {
-  return { isEnabled: false, enable() {}, disable() {} };
+export function draftMode() {
+  assertDynamicAllowed(requestStore(), "draftMode()");
+  return syncThenable({ isEnabled: false, enable() {}, disable() {} });
 }
